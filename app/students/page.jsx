@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   Badge,
   Button,
   Card,
@@ -10,13 +11,14 @@ import {
   InputGroup,
   Modal,
   Row,
+  Spinner,
   Table,
 } from 'react-bootstrap';
 import AdminLayout from '@/components/AdminLayout';
 
 const emptyForm = {
   name: '',
-  className: '',
+  classId: '',
   section: '',
   rollNo: '',
   guardianName: '',
@@ -27,57 +29,32 @@ const emptyForm = {
   feePaid: '',
 };
 
-function safeJsonParse(value, fallback) {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return fallback;
-  }
+function getApiBase() {
+  return (process.env.NEXT_PUBLIC_API_BASE || '').replace(/\/$/, '');
 }
 
-function normalizeClassMaster(raw) {
-  if (!Array.isArray(raw)) return [];
+function getAuthToken() {
+  if (typeof window === 'undefined') return '';
+  return (
+    localStorage.getItem('school_admin_token') ||
+    localStorage.getItem('token') ||
+    localStorage.getItem('access_token') ||
+    ''
+  );
+}
 
-  return raw
-    .map((item, index) => {
-      if (typeof item === 'string') {
-        return {
-          id: `class-${index}`,
-          name: item,
-          sections: [],
-        };
-      }
-
-      const name =
-        item?.name ||
-        item?.className ||
-        item?.title ||
-        item?.standard ||
-        '';
-
-      const sections = Array.isArray(item?.sections)
-        ? item.sections
-            .map((s) => {
-              if (typeof s === 'string') return s;
-              return s?.name || s?.section || '';
-            })
-            .filter(Boolean)
-        : [];
-
-      if (!name) return null;
-
-      return {
-        id: item?.id || `class-${index}`,
-        name,
-        sections,
-      };
-    })
-    .filter(Boolean);
+function authHeaders(extra = {}) {
+  const token = getAuthToken();
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...extra,
+  };
 }
 
 function getFeeStatus(student) {
-  const total = Number(student?.feeTotal || 0);
-  const paid = Number(student?.feePaid || 0);
+  const total = Number(student?.fee_total ?? student?.feeTotal ?? 0);
+  const paid = Number(student?.fee_paid ?? student?.feePaid ?? 0);
 
   if (total <= 0) return 'Pending';
   if (paid <= 0) return 'Pending';
@@ -99,7 +76,10 @@ function statusVariant(status) {
 }
 
 export default function StudentsPage() {
+  const API_BASE = getApiBase();
+
   const [students, setStudents] = useState([]);
+  const [classes, setClasses] = useState([]);
   const [query, setQuery] = useState('');
   const [classFilter, setClassFilter] = useState('');
   const [sectionFilter, setSectionFilter] = useState('');
@@ -107,75 +87,25 @@ export default function StudentsPage() {
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(emptyForm);
   const [errors, setErrors] = useState({});
-  const [classMaster, setClassMaster] = useState([]);
+  const [pageError, setPageError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    const savedClasses = safeJsonParse(
-      localStorage.getItem('school_classes_v1'),
-      []
-    );
-
-    setClassMaster(normalizeClassMaster(savedClasses));
-  }, []);
-
-  const derivedClassOptionsFromStudents = useMemo(() => {
-    return [...new Set(students.map((s) => s.className).filter(Boolean))];
-  }, [students]);
-
-  const classOptions = useMemo(() => {
-    const fromMaster = classMaster.map((item) => item.name).filter(Boolean);
-    return fromMaster.length > 0
-      ? fromMaster
-      : derivedClassOptionsFromStudents;
-  }, [classMaster, derivedClassOptionsFromStudents]);
-
-  const derivedSectionOptionsFromStudents = useMemo(() => {
-    const base = classFilter
-      ? students.filter((s) => s.className === classFilter)
-      : students;
-
-    return [...new Set(base.map((s) => s.section).filter(Boolean))];
-  }, [students, classFilter]);
+  const classOptions = useMemo(() => classes, [classes]);
 
   const sectionOptions = useMemo(() => {
-    if (classMaster.length > 0) {
-      const selectedClass = classMaster.find(
-        (item) => item.name === classFilter
-      );
-
-      if (selectedClass) return selectedClass.sections || [];
-
-      if (!classFilter) {
-        return [
-          ...new Set(
-            classMaster.flatMap((item) => item.sections || []).filter(Boolean)
-          ),
-        ];
-      }
+    if (!classFilter) {
+      return [...new Set(classes.flatMap((item) => item.sections || []))];
     }
-
-    return derivedSectionOptionsFromStudents;
-  }, [classMaster, classFilter, derivedSectionOptionsFromStudents]);
+    const selected = classes.find((item) => String(item.id) === String(classFilter));
+    return selected?.sections || [];
+  }, [classes, classFilter]);
 
   const modalSectionOptions = useMemo(() => {
-    if (classMaster.length > 0) {
-      const selectedClass = classMaster.find(
-        (item) => item.name === form.className
-      );
-      return selectedClass?.sections || [];
-    }
-
-    return [
-      ...new Set(
-        students
-          .filter((s) => !form.className || s.className === form.className)
-          .map((s) => s.section)
-          .filter(Boolean)
-      ),
-    ];
-  }, [classMaster, form.className, students]);
+    if (!form.classId) return [];
+    const selected = classes.find((item) => String(item.id) === String(form.classId));
+    return selected?.sections || [];
+  }, [classes, form.classId]);
 
   const filteredStudents = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -185,21 +115,24 @@ export default function StudentsPage() {
         !q ||
         [
           student.name,
-          student.className,
+          student.class_name,
           student.section,
-          student.rollNo,
-          student.guardianName,
+          student.roll_no,
+          student.guardian_name,
           student.phone,
           student.status,
           getFeeStatus(student),
-          String(student.attendancePercentage ?? ''),
+          String(student.attendance_percentage ?? ''),
         ]
           .join(' ')
           .toLowerCase()
           .includes(q);
 
-      const matchesClass = !classFilter || student.className === classFilter;
-      const matchesSection = !sectionFilter || student.section === sectionFilter;
+      const matchesClass =
+        !classFilter || String(student.class_id) === String(classFilter);
+
+      const matchesSection =
+        !sectionFilter || student.section === sectionFilter;
 
       return matchesQuery && matchesClass && matchesSection;
     });
@@ -216,6 +149,90 @@ export default function StudentsPage() {
     };
   }, [students]);
 
+  async function readJsonSafe(res) {
+    const text = await res.text();
+    try {
+      return text ? JSON.parse(text) : {};
+    } catch {
+      return { detail: text || 'Unexpected server response' };
+    }
+  }
+
+  async function loadClasses() {
+    const res = await fetch(`${API_BASE}/admin/classes`, {
+      method: 'GET',
+      headers: authHeaders(),
+      cache: 'no-store',
+    });
+
+    const data = await readJsonSafe(res);
+
+    if (!res.ok) {
+      throw new Error(data?.detail || 'Failed to load classes');
+    }
+
+    setClasses(Array.isArray(data) ? data : []);
+  }
+
+  async function loadStudents() {
+    const params = new URLSearchParams();
+    if (query.trim()) params.set('search', query.trim());
+    if (classFilter) params.set('class_id', classFilter);
+    if (sectionFilter) params.set('section', sectionFilter);
+
+    const qs = params.toString();
+    const url = `${API_BASE}/admin/students${qs ? `?${qs}` : ''}`;
+
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: authHeaders(),
+      cache: 'no-store',
+    });
+
+    const data = await readJsonSafe(res);
+
+    if (!res.ok) {
+      throw new Error(data?.detail || 'Failed to load students');
+    }
+
+    setStudents(Array.isArray(data?.items) ? data.items : []);
+  }
+
+  async function refreshAll() {
+    if (!API_BASE) {
+      setPageError('NEXT_PUBLIC_API_BASE is missing');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setPageError('');
+      await Promise.all([loadClasses(), loadStudents()]);
+    } catch (err) {
+      setPageError(err?.message || 'Failed to load data');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    refreshAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!API_BASE) return;
+
+    const t = setTimeout(() => {
+      loadStudents().catch((err) => {
+        setPageError(err?.message || 'Failed to load students');
+      });
+    }, 250);
+
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, classFilter, sectionFilter]);
+
   const openAddModal = () => {
     setEditingId(null);
     setForm(emptyForm);
@@ -227,24 +244,24 @@ export default function StudentsPage() {
     setEditingId(student.id);
     setForm({
       name: student.name || '',
-      className: student.className || '',
+      classId: student.class_id ? String(student.class_id) : '',
       section: student.section || '',
-      rollNo: student.rollNo || '',
-      guardianName: student.guardianName || '',
+      rollNo: student.roll_no || '',
+      guardianName: student.guardian_name || '',
       phone: student.phone || '',
       status: student.status || 'Active',
       attendancePercentage:
-        student.attendancePercentage !== undefined &&
-        student.attendancePercentage !== null
-          ? String(student.attendancePercentage)
+        student.attendance_percentage !== undefined &&
+        student.attendance_percentage !== null
+          ? String(student.attendance_percentage)
           : '',
       feeTotal:
-        student.feeTotal !== undefined && student.feeTotal !== null
-          ? String(student.feeTotal)
+        student.fee_total !== undefined && student.fee_total !== null
+          ? String(student.fee_total)
           : '',
       feePaid:
-        student.feePaid !== undefined && student.feePaid !== null
-          ? String(student.feePaid)
+        student.fee_paid !== undefined && student.fee_paid !== null
+          ? String(student.fee_paid)
           : '',
     });
     setErrors({});
@@ -262,10 +279,10 @@ export default function StudentsPage() {
     const { name, value } = e.target;
 
     setForm((prev) => {
-      if (name === 'className') {
+      if (name === 'classId') {
         return {
           ...prev,
-          className: value,
+          classId: value,
           section: '',
         };
       }
@@ -283,7 +300,7 @@ export default function StudentsPage() {
     const nextErrors = {};
 
     if (!form.name.trim()) nextErrors.name = 'Student name is required';
-    if (!form.className.trim()) nextErrors.className = 'Class is required';
+    if (!form.classId.trim()) nextErrors.classId = 'Class is required';
     if (!form.section.trim()) nextErrors.section = 'Section is required';
     if (!form.rollNo.trim()) nextErrors.rollNo = 'Roll number is required';
     if (!form.guardianName.trim()) {
@@ -326,46 +343,75 @@ export default function StudentsPage() {
     return Object.keys(nextErrors).length === 0;
   };
 
-  const onSubmit = (e) => {
+  const onSubmit = async (e) => {
     e.preventDefault();
     if (!validate()) return;
 
     const payload = {
       name: form.name.trim(),
-      className: form.className.trim(),
+      class_id: Number(form.classId),
       section: form.section.trim(),
-      rollNo: form.rollNo.trim(),
-      guardianName: form.guardianName.trim(),
+      roll_no: form.rollNo.trim(),
+      guardian_name: form.guardianName.trim(),
       phone: form.phone.trim(),
       status: form.status,
-      attendancePercentage: Number(form.attendancePercentage),
-      feeTotal: Number(form.feeTotal || 0),
-      feePaid: Number(form.feePaid || 0),
+      attendance_percentage: Number(form.attendancePercentage),
+      fee_total: Number(form.feeTotal || 0),
+      fee_paid: Number(form.feePaid || 0),
     };
 
-    if (editingId) {
-      setStudents((prev) =>
-        prev.map((student) =>
-          student.id === editingId ? { ...student, ...payload } : student
-        )
-      );
-    } else {
-      setStudents((prev) => [
-        {
-          id: Date.now(),
-          ...payload,
-        },
-        ...prev,
-      ]);
-    }
+    try {
+      setSaving(true);
+      setPageError('');
 
-    closeModal();
+      const url = editingId
+        ? `${API_BASE}/admin/students/${editingId}`
+        : `${API_BASE}/admin/students`;
+
+      const method = editingId ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method,
+        headers: authHeaders(),
+        body: JSON.stringify(payload),
+      });
+
+      const data = await readJsonSafe(res);
+
+      if (!res.ok) {
+        throw new Error(data?.detail || 'Failed to save student');
+      }
+
+      await loadStudents();
+      closeModal();
+    } catch (err) {
+      setPageError(err?.message || 'Failed to save student');
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const deleteStudent = (id) => {
+  const deleteStudent = async (id) => {
     const ok = window.confirm('Delete this student?');
     if (!ok) return;
-    setStudents((prev) => prev.filter((student) => student.id !== id));
+
+    try {
+      setPageError('');
+      const res = await fetch(`${API_BASE}/admin/students/${id}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      });
+
+      const data = await readJsonSafe(res);
+
+      if (!res.ok) {
+        throw new Error(data?.detail || 'Failed to delete student');
+      }
+
+      await loadStudents();
+    } catch (err) {
+      setPageError(err?.message || 'Failed to delete student');
+    }
   };
 
   return (
@@ -373,6 +419,12 @@ export default function StudentsPage() {
       title="Students"
       subtitle="Manage student profiles, admissions, roll numbers, and class mapping."
     >
+      {pageError ? (
+        <Alert variant="danger" className="mb-4">
+          {pageError}
+        </Alert>
+      ) : null}
+
       <Row className="g-4 mb-4">
         <Col md={4}>
           <Card className="card-soft h-100">
@@ -426,8 +478,8 @@ export default function StudentsPage() {
               >
                 <option value="">All Classes</option>
                 {classOptions.map((item) => (
-                  <option key={item} value={item}>
-                    {item}
+                  <option key={item.id} value={item.id}>
+                    {item.name}
                   </option>
                 ))}
               </Form.Select>
@@ -454,75 +506,81 @@ export default function StudentsPage() {
             </Col>
           </Row>
 
-          <Table responsive hover>
-            <thead>
-              <tr>
-                <th>Student Name</th>
-                <th>Class</th>
-                <th>Section</th>
-                <th>Roll No</th>
-                <th>Guardian</th>
-                <th>Phone</th>
-                <th>Attendance %</th>
-                <th>Fee Status</th>
-                <th>Status</th>
-                <th style={{ width: 180 }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredStudents.length === 0 ? (
+          {loading ? (
+            <div className="text-center py-4">
+              <Spinner animation="border" />
+            </div>
+          ) : (
+            <Table responsive hover>
+              <thead>
                 <tr>
-                  <td colSpan={10} className="text-center py-4">
-                    No students found
-                  </td>
+                  <th>Student Name</th>
+                  <th>Class</th>
+                  <th>Section</th>
+                  <th>Roll No</th>
+                  <th>Guardian</th>
+                  <th>Phone</th>
+                  <th>Attendance %</th>
+                  <th>Fee Status</th>
+                  <th>Status</th>
+                  <th style={{ width: 180 }}>Actions</th>
                 </tr>
-              ) : (
-                filteredStudents.map((student) => {
-                  const currentFeeStatus = getFeeStatus(student);
+              </thead>
+              <tbody>
+                {filteredStudents.length === 0 ? (
+                  <tr>
+                    <td colSpan={10} className="text-center py-4">
+                      No students found
+                    </td>
+                  </tr>
+                ) : (
+                  filteredStudents.map((student) => {
+                    const currentFeeStatus = getFeeStatus(student);
 
-                  return (
-                    <tr key={student.id}>
-                      <td>{student.name}</td>
-                      <td>{student.className}</td>
-                      <td>{student.section || '-'}</td>
-                      <td>{student.rollNo}</td>
-                      <td>{student.guardianName}</td>
-                      <td>{student.phone}</td>
-                      <td>{student.attendancePercentage ?? 0}%</td>
-                      <td>
-                        <Badge bg={feeVariant(currentFeeStatus)}>
-                          {currentFeeStatus}
-                        </Badge>
-                      </td>
-                      <td>
-                        <Badge bg={statusVariant(student.status)}>
-                          {student.status}
-                        </Badge>
-                      </td>
-                      <td>
-                        <div className="d-flex gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline-primary"
-                            onClick={() => openEditModal(student)}
-                          >
-                            Edit
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline-danger"
-                            onClick={() => deleteStudent(student.id)}
-                          >
-                            Delete
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </Table>
+                    return (
+                      <tr key={student.id}>
+                        <td>{student.name}</td>
+                        <td>{student.class_name}</td>
+                        <td>{student.section || '-'}</td>
+                        <td>{student.roll_no}</td>
+                        <td>{student.guardian_name}</td>
+                        <td>{student.phone}</td>
+                        <td>{student.attendance_percentage ?? 0}%</td>
+                        <td>
+                          <Badge bg={feeVariant(currentFeeStatus)}>
+                            {currentFeeStatus}
+                          </Badge>
+                        </td>
+                        <td>
+                          <Badge bg={statusVariant(student.status)}>
+                            {student.status}
+                          </Badge>
+                        </td>
+                        <td>
+                          <div className="d-flex gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline-primary"
+                              onClick={() => openEditModal(student)}
+                            >
+                              Edit
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline-danger"
+                              onClick={() => deleteStudent(student.id)}
+                            >
+                              Delete
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </Table>
+          )}
         </Card.Body>
       </Card>
 
@@ -556,20 +614,20 @@ export default function StudentsPage() {
                 <Form.Group>
                   <Form.Label>Class</Form.Label>
                   <Form.Select
-                    name="className"
-                    value={form.className}
+                    name="classId"
+                    value={form.classId}
                     onChange={onChange}
-                    isInvalid={!!errors.className}
+                    isInvalid={!!errors.classId}
                   >
                     <option value="">Select class</option>
                     {classOptions.map((item) => (
-                      <option key={item} value={item}>
-                        {item}
+                      <option key={item.id} value={item.id}>
+                        {item.name}
                       </option>
                     ))}
                   </Form.Select>
                   <Form.Control.Feedback type="invalid">
-                    {errors.className}
+                    {errors.classId}
                   </Form.Control.Feedback>
                 </Form.Group>
               </Col>
@@ -582,7 +640,7 @@ export default function StudentsPage() {
                     value={form.section}
                     onChange={onChange}
                     isInvalid={!!errors.section}
-                    disabled={!form.className}
+                    disabled={!form.classId}
                   >
                     <option value="">Select section</option>
                     {modalSectionOptions.map((item) => (
@@ -730,11 +788,11 @@ export default function StudentsPage() {
           </Modal.Body>
 
           <Modal.Footer>
-            <Button variant="outline-secondary" onClick={closeModal}>
+            <Button variant="outline-secondary" onClick={closeModal} disabled={saving}>
               Cancel
             </Button>
-            <Button type="submit">
-              {editingId ? 'Update Student' : 'Save Student'}
+            <Button type="submit" disabled={saving}>
+              {saving ? 'Saving...' : editingId ? 'Update Student' : 'Save Student'}
             </Button>
           </Modal.Footer>
         </Form>
