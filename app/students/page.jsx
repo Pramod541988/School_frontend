@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Badge,
   Button,
@@ -23,8 +23,80 @@ const emptyForm = {
   phone: '',
   status: 'Active',
   attendancePercentage: '',
-  feeStatus: 'Pending',
+  feeTotal: '',
+  feePaid: '',
 };
+
+function safeJsonParse(value, fallback) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeClassMaster(raw) {
+  if (!Array.isArray(raw)) return [];
+
+  return raw
+    .map((item, index) => {
+      if (typeof item === 'string') {
+        return {
+          id: `class-${index}`,
+          name: item,
+          sections: [],
+        };
+      }
+
+      const name =
+        item?.name ||
+        item?.className ||
+        item?.title ||
+        item?.standard ||
+        '';
+
+      const sections = Array.isArray(item?.sections)
+        ? item.sections
+            .map((s) => {
+              if (typeof s === 'string') return s;
+              return s?.name || s?.section || '';
+            })
+            .filter(Boolean)
+        : [];
+
+      if (!name) return null;
+
+      return {
+        id: item?.id || `class-${index}`,
+        name,
+        sections,
+      };
+    })
+    .filter(Boolean);
+}
+
+function getFeeStatus(student) {
+  const total = Number(student?.feeTotal || 0);
+  const paid = Number(student?.feePaid || 0);
+
+  if (total <= 0) return 'Pending';
+  if (paid <= 0) return 'Pending';
+  if (paid >= total) return 'Paid';
+  return 'Partial';
+}
+
+function feeVariant(feeStatus) {
+  if (feeStatus === 'Paid') return 'success';
+  if (feeStatus === 'Partial') return 'warning';
+  if (feeStatus === 'Pending') return 'danger';
+  return 'secondary';
+}
+
+function statusVariant(status) {
+  if (status === 'Active') return 'success';
+  if (status === 'Inactive') return 'secondary';
+  return 'warning';
+}
 
 export default function StudentsPage() {
   const [students, setStudents] = useState([]);
@@ -35,18 +107,75 @@ export default function StudentsPage() {
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(emptyForm);
   const [errors, setErrors] = useState({});
+  const [classMaster, setClassMaster] = useState([]);
 
-  const classOptions = useMemo(() => {
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const savedClasses = safeJsonParse(
+      localStorage.getItem('school_classes_v1'),
+      []
+    );
+
+    setClassMaster(normalizeClassMaster(savedClasses));
+  }, []);
+
+  const derivedClassOptionsFromStudents = useMemo(() => {
     return [...new Set(students.map((s) => s.className).filter(Boolean))];
   }, [students]);
 
-  const sectionOptions = useMemo(() => {
+  const classOptions = useMemo(() => {
+    const fromMaster = classMaster.map((item) => item.name).filter(Boolean);
+    return fromMaster.length > 0
+      ? fromMaster
+      : derivedClassOptionsFromStudents;
+  }, [classMaster, derivedClassOptionsFromStudents]);
+
+  const derivedSectionOptionsFromStudents = useMemo(() => {
     const base = classFilter
       ? students.filter((s) => s.className === classFilter)
       : students;
 
     return [...new Set(base.map((s) => s.section).filter(Boolean))];
   }, [students, classFilter]);
+
+  const sectionOptions = useMemo(() => {
+    if (classMaster.length > 0) {
+      const selectedClass = classMaster.find(
+        (item) => item.name === classFilter
+      );
+
+      if (selectedClass) return selectedClass.sections || [];
+
+      if (!classFilter) {
+        return [
+          ...new Set(
+            classMaster.flatMap((item) => item.sections || []).filter(Boolean)
+          ),
+        ];
+      }
+    }
+
+    return derivedSectionOptionsFromStudents;
+  }, [classMaster, classFilter, derivedSectionOptionsFromStudents]);
+
+  const modalSectionOptions = useMemo(() => {
+    if (classMaster.length > 0) {
+      const selectedClass = classMaster.find(
+        (item) => item.name === form.className
+      );
+      return selectedClass?.sections || [];
+    }
+
+    return [
+      ...new Set(
+        students
+          .filter((s) => !form.className || s.className === form.className)
+          .map((s) => s.section)
+          .filter(Boolean)
+      ),
+    ];
+  }, [classMaster, form.className, students]);
 
   const filteredStudents = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -62,18 +191,15 @@ export default function StudentsPage() {
           student.guardianName,
           student.phone,
           student.status,
-          student.feeStatus,
+          getFeeStatus(student),
           String(student.attendancePercentage ?? ''),
         ]
           .join(' ')
           .toLowerCase()
           .includes(q);
 
-      const matchesClass =
-        !classFilter || student.className === classFilter;
-
-      const matchesSection =
-        !sectionFilter || student.section === sectionFilter;
+      const matchesClass = !classFilter || student.className === classFilter;
+      const matchesSection = !sectionFilter || student.section === sectionFilter;
 
       return matchesQuery && matchesClass && matchesSection;
     });
@@ -112,7 +238,14 @@ export default function StudentsPage() {
         student.attendancePercentage !== null
           ? String(student.attendancePercentage)
           : '',
-      feeStatus: student.feeStatus || 'Pending',
+      feeTotal:
+        student.feeTotal !== undefined && student.feeTotal !== null
+          ? String(student.feeTotal)
+          : '',
+      feePaid:
+        student.feePaid !== undefined && student.feePaid !== null
+          ? String(student.feePaid)
+          : '',
     });
     setErrors({});
     setShowModal(true);
@@ -127,7 +260,22 @@ export default function StudentsPage() {
 
   const onChange = (e) => {
     const { name, value } = e.target;
-    setForm((prev) => ({ ...prev, [name]: value }));
+
+    setForm((prev) => {
+      if (name === 'className') {
+        return {
+          ...prev,
+          className: value,
+          section: '',
+        };
+      }
+
+      return {
+        ...prev,
+        [name]: value,
+      };
+    });
+
     setErrors((prev) => ({ ...prev, [name]: '' }));
   };
 
@@ -158,6 +306,22 @@ export default function StudentsPage() {
       }
     }
 
+    if (form.feeTotal !== '' && Number(form.feeTotal) < 0) {
+      nextErrors.feeTotal = 'Fee total cannot be negative';
+    }
+
+    if (form.feePaid !== '' && Number(form.feePaid) < 0) {
+      nextErrors.feePaid = 'Fee paid cannot be negative';
+    }
+
+    if (
+      form.feeTotal !== '' &&
+      form.feePaid !== '' &&
+      Number(form.feePaid) > Number(form.feeTotal)
+    ) {
+      nextErrors.feePaid = 'Fee paid cannot be greater than fee total';
+    }
+
     setErrors(nextErrors);
     return Object.keys(nextErrors).length === 0;
   };
@@ -175,15 +339,14 @@ export default function StudentsPage() {
       phone: form.phone.trim(),
       status: form.status,
       attendancePercentage: Number(form.attendancePercentage),
-      feeStatus: form.feeStatus,
+      feeTotal: Number(form.feeTotal || 0),
+      feePaid: Number(form.feePaid || 0),
     };
 
     if (editingId) {
       setStudents((prev) =>
         prev.map((student) =>
-          student.id === editingId
-            ? { ...student, ...payload }
-            : student
+          student.id === editingId ? { ...student, ...payload } : student
         )
       );
     } else {
@@ -203,19 +366,6 @@ export default function StudentsPage() {
     const ok = window.confirm('Delete this student?');
     if (!ok) return;
     setStudents((prev) => prev.filter((student) => student.id !== id));
-  };
-
-  const statusVariant = (status) => {
-    if (status === 'Active') return 'success';
-    if (status === 'Inactive') return 'secondary';
-    return 'warning';
-  };
-
-  const feeVariant = (feeStatus) => {
-    if (feeStatus === 'Paid') return 'success';
-    if (feeStatus === 'Partial') return 'warning';
-    if (feeStatus === 'Pending') return 'danger';
-    return 'secondary';
   };
 
   return (
@@ -327,45 +477,49 @@ export default function StudentsPage() {
                   </td>
                 </tr>
               ) : (
-                filteredStudents.map((student) => (
-                  <tr key={student.id}>
-                    <td>{student.name}</td>
-                    <td>{student.className}</td>
-                    <td>{student.section || '-'}</td>
-                    <td>{student.rollNo}</td>
-                    <td>{student.guardianName}</td>
-                    <td>{student.phone}</td>
-                    <td>{student.attendancePercentage ?? 0}%</td>
-                    <td>
-                      <Badge bg={feeVariant(student.feeStatus)}>
-                        {student.feeStatus}
-                      </Badge>
-                    </td>
-                    <td>
-                      <Badge bg={statusVariant(student.status)}>
-                        {student.status}
-                      </Badge>
-                    </td>
-                    <td>
-                      <div className="d-flex gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline-primary"
-                          onClick={() => openEditModal(student)}
-                        >
-                          Edit
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline-danger"
-                          onClick={() => deleteStudent(student.id)}
-                        >
-                          Delete
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                filteredStudents.map((student) => {
+                  const currentFeeStatus = getFeeStatus(student);
+
+                  return (
+                    <tr key={student.id}>
+                      <td>{student.name}</td>
+                      <td>{student.className}</td>
+                      <td>{student.section || '-'}</td>
+                      <td>{student.rollNo}</td>
+                      <td>{student.guardianName}</td>
+                      <td>{student.phone}</td>
+                      <td>{student.attendancePercentage ?? 0}%</td>
+                      <td>
+                        <Badge bg={feeVariant(currentFeeStatus)}>
+                          {currentFeeStatus}
+                        </Badge>
+                      </td>
+                      <td>
+                        <Badge bg={statusVariant(student.status)}>
+                          {student.status}
+                        </Badge>
+                      </td>
+                      <td>
+                        <div className="d-flex gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline-primary"
+                            onClick={() => openEditModal(student)}
+                          >
+                            Edit
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline-danger"
+                            onClick={() => deleteStudent(student.id)}
+                          >
+                            Delete
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </Table>
@@ -401,13 +555,19 @@ export default function StudentsPage() {
               <Col md={6}>
                 <Form.Group>
                   <Form.Label>Class</Form.Label>
-                  <Form.Control
+                  <Form.Select
                     name="className"
                     value={form.className}
                     onChange={onChange}
                     isInvalid={!!errors.className}
-                    placeholder="Example: 8"
-                  />
+                  >
+                    <option value="">Select class</option>
+                    {classOptions.map((item) => (
+                      <option key={item} value={item}>
+                        {item}
+                      </option>
+                    ))}
+                  </Form.Select>
                   <Form.Control.Feedback type="invalid">
                     {errors.className}
                   </Form.Control.Feedback>
@@ -417,13 +577,20 @@ export default function StudentsPage() {
               <Col md={6}>
                 <Form.Group>
                   <Form.Label>Section</Form.Label>
-                  <Form.Control
+                  <Form.Select
                     name="section"
                     value={form.section}
                     onChange={onChange}
                     isInvalid={!!errors.section}
-                    placeholder="Example: A"
-                  />
+                    disabled={!form.className}
+                  >
+                    <option value="">Select section</option>
+                    {modalSectionOptions.map((item) => (
+                      <option key={item} value={item}>
+                        {item}
+                      </option>
+                    ))}
+                  </Form.Select>
                   <Form.Control.Feedback type="invalid">
                     {errors.section}
                   </Form.Control.Feedback>
@@ -499,21 +666,6 @@ export default function StudentsPage() {
 
               <Col md={6}>
                 <Form.Group>
-                  <Form.Label>Fee Status</Form.Label>
-                  <Form.Select
-                    name="feeStatus"
-                    value={form.feeStatus}
-                    onChange={onChange}
-                  >
-                    <option value="Paid">Paid</option>
-                    <option value="Partial">Partial</option>
-                    <option value="Pending">Pending</option>
-                  </Form.Select>
-                </Form.Group>
-              </Col>
-
-              <Col md={6}>
-                <Form.Group>
                   <Form.Label>Status</Form.Label>
                   <Form.Select
                     name="status"
@@ -523,6 +675,55 @@ export default function StudentsPage() {
                     <option value="Active">Active</option>
                     <option value="Inactive">Inactive</option>
                   </Form.Select>
+                </Form.Group>
+              </Col>
+
+              <Col md={6}>
+                <Form.Group>
+                  <Form.Label>Total Fee</Form.Label>
+                  <Form.Control
+                    name="feeTotal"
+                    type="number"
+                    min="0"
+                    value={form.feeTotal}
+                    onChange={onChange}
+                    isInvalid={!!errors.feeTotal}
+                    placeholder="Enter total fee"
+                  />
+                  <Form.Control.Feedback type="invalid">
+                    {errors.feeTotal}
+                  </Form.Control.Feedback>
+                </Form.Group>
+              </Col>
+
+              <Col md={6}>
+                <Form.Group>
+                  <Form.Label>Paid Fee</Form.Label>
+                  <Form.Control
+                    name="feePaid"
+                    type="number"
+                    min="0"
+                    value={form.feePaid}
+                    onChange={onChange}
+                    isInvalid={!!errors.feePaid}
+                    placeholder="Enter paid fee"
+                  />
+                  <Form.Control.Feedback type="invalid">
+                    {errors.feePaid}
+                  </Form.Control.Feedback>
+                </Form.Group>
+              </Col>
+
+              <Col md={12}>
+                <Form.Group>
+                  <Form.Label>Fee Status</Form.Label>
+                  <Form.Control
+                    value={getFeeStatus({
+                      feeTotal: form.feeTotal,
+                      feePaid: form.feePaid,
+                    })}
+                    readOnly
+                  />
                 </Form.Group>
               </Col>
             </Row>
