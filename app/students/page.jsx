@@ -13,47 +13,76 @@ import {
   Table,
 } from 'react-bootstrap';
 import AdminLayout from '@/components/AdminLayout';
-import PageHeader from '@/components/PageHeader';
 
 const emptyForm = {
   name: '',
   className: '',
+  section: '',
   rollNo: '',
   guardianName: '',
   phone: '',
   status: 'Active',
+  attendancePercentage: '',
+  feeStatus: 'Pending',
 };
 
 export default function StudentsPage() {
   const [students, setStudents] = useState([]);
   const [query, setQuery] = useState('');
+  const [classFilter, setClassFilter] = useState('');
+  const [sectionFilter, setSectionFilter] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(emptyForm);
   const [errors, setErrors] = useState({});
 
+  const classOptions = useMemo(() => {
+    return [...new Set(students.map((s) => s.className).filter(Boolean))];
+  }, [students]);
+
+  const sectionOptions = useMemo(() => {
+    const base = classFilter
+      ? students.filter((s) => s.className === classFilter)
+      : students;
+
+    return [...new Set(base.map((s) => s.section).filter(Boolean))];
+  }, [students, classFilter]);
+
   const filteredStudents = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return students;
 
-    return students.filter((student) =>
-      [
-        student.name,
-        student.className,
-        student.rollNo,
-        student.guardianName,
-        student.phone,
-        student.status,
-      ]
-        .join(' ')
-        .toLowerCase()
-        .includes(q)
-    );
-  }, [students, query]);
+    return students.filter((student) => {
+      const matchesQuery =
+        !q ||
+        [
+          student.name,
+          student.className,
+          student.section,
+          student.rollNo,
+          student.guardianName,
+          student.phone,
+          student.status,
+          student.feeStatus,
+          String(student.attendancePercentage ?? ''),
+        ]
+          .join(' ')
+          .toLowerCase()
+          .includes(q);
+
+      const matchesClass =
+        !classFilter || student.className === classFilter;
+
+      const matchesSection =
+        !sectionFilter || student.section === sectionFilter;
+
+      return matchesQuery && matchesClass && matchesSection;
+    });
+  }, [students, query, classFilter, sectionFilter]);
 
   const stats = useMemo(() => {
     const active = students.filter((s) => s.status === 'Active').length;
     const inactive = students.filter((s) => s.status === 'Inactive').length;
+
     return {
       total: students.length,
       active,
@@ -73,10 +102,17 @@ export default function StudentsPage() {
     setForm({
       name: student.name || '',
       className: student.className || '',
+      section: student.section || '',
       rollNo: student.rollNo || '',
       guardianName: student.guardianName || '',
       phone: student.phone || '',
       status: student.status || 'Active',
+      attendancePercentage:
+        student.attendancePercentage !== undefined &&
+        student.attendancePercentage !== null
+          ? String(student.attendancePercentage)
+          : '',
+      feeStatus: student.feeStatus || 'Pending',
     });
     setErrors({});
     setShowModal(true);
@@ -100,13 +136,26 @@ export default function StudentsPage() {
 
     if (!form.name.trim()) nextErrors.name = 'Student name is required';
     if (!form.className.trim()) nextErrors.className = 'Class is required';
+    if (!form.section.trim()) nextErrors.section = 'Section is required';
     if (!form.rollNo.trim()) nextErrors.rollNo = 'Roll number is required';
-    if (!form.guardianName.trim()) nextErrors.guardianName = 'Guardian name is required';
+    if (!form.guardianName.trim()) {
+      nextErrors.guardianName = 'Guardian name is required';
+    }
 
     if (!form.phone.trim()) {
       nextErrors.phone = 'Phone number is required';
     } else if (!/^[0-9]{10}$/.test(form.phone.trim())) {
       nextErrors.phone = 'Phone number must be 10 digits';
+    }
+
+    if (form.attendancePercentage === '') {
+      nextErrors.attendancePercentage = 'Attendance percentage is required';
+    } else {
+      const val = Number(form.attendancePercentage);
+      if (Number.isNaN(val) || val < 0 || val > 100) {
+        nextErrors.attendancePercentage =
+          'Attendance percentage must be between 0 and 100';
+      }
     }
 
     setErrors(nextErrors);
@@ -117,19 +166,23 @@ export default function StudentsPage() {
     e.preventDefault();
     if (!validate()) return;
 
+    const payload = {
+      name: form.name.trim(),
+      className: form.className.trim(),
+      section: form.section.trim(),
+      rollNo: form.rollNo.trim(),
+      guardianName: form.guardianName.trim(),
+      phone: form.phone.trim(),
+      status: form.status,
+      attendancePercentage: Number(form.attendancePercentage),
+      feeStatus: form.feeStatus,
+    };
+
     if (editingId) {
       setStudents((prev) =>
         prev.map((student) =>
           student.id === editingId
-            ? {
-                ...student,
-                ...form,
-                name: form.name.trim(),
-                className: form.className.trim(),
-                rollNo: form.rollNo.trim(),
-                guardianName: form.guardianName.trim(),
-                phone: form.phone.trim(),
-              }
+            ? { ...student, ...payload }
             : student
         )
       );
@@ -137,12 +190,7 @@ export default function StudentsPage() {
       setStudents((prev) => [
         {
           id: Date.now(),
-          name: form.name.trim(),
-          className: form.className.trim(),
-          rollNo: form.rollNo.trim(),
-          guardianName: form.guardianName.trim(),
-          phone: form.phone.trim(),
-          status: form.status,
+          ...payload,
         },
         ...prev,
       ]);
@@ -163,18 +211,18 @@ export default function StudentsPage() {
     return 'warning';
   };
 
+  const feeVariant = (feeStatus) => {
+    if (feeStatus === 'Paid') return 'success';
+    if (feeStatus === 'Partial') return 'warning';
+    if (feeStatus === 'Pending') return 'danger';
+    return 'secondary';
+  };
+
   return (
     <AdminLayout
       title="Students"
       subtitle="Manage student profiles, admissions, roll numbers, and class mapping."
     >
-      <PageHeader
-        title="Students Section"
-        subtitle="This page is ready for student listing, search, add, edit, and delete. Backend CRUD can be connected next without changing the layout."
-        buttonText="Add Student"
-        onClick={openAddModal}
-      />
-
       <Row className="g-4 mb-4">
         <Col md={4}>
           <Card className="card-soft h-100">
@@ -207,18 +255,49 @@ export default function StudentsPage() {
       <Card className="card-soft">
         <Card.Body>
           <Row className="g-3 align-items-center mb-4">
-            <Col md={7} lg={5}>
+            <Col md={12} lg={4}>
               <InputGroup>
                 <InputGroup.Text>Search</InputGroup.Text>
                 <Form.Control
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search by name, class, roll no, guardian, phone..."
+                  placeholder="Search by name, class, section, roll no..."
                 />
               </InputGroup>
             </Col>
 
-            <Col className="text-md-end">
+            <Col md={6} lg={3}>
+              <Form.Select
+                value={classFilter}
+                onChange={(e) => {
+                  setClassFilter(e.target.value);
+                  setSectionFilter('');
+                }}
+              >
+                <option value="">All Classes</option>
+                {classOptions.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </Form.Select>
+            </Col>
+
+            <Col md={6} lg={3}>
+              <Form.Select
+                value={sectionFilter}
+                onChange={(e) => setSectionFilter(e.target.value)}
+              >
+                <option value="">All Sections</option>
+                {sectionOptions.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </Form.Select>
+            </Col>
+
+            <Col lg={2} className="text-lg-end">
               <Button variant="primary" onClick={openAddModal}>
                 Add Student
               </Button>
@@ -230,9 +309,12 @@ export default function StudentsPage() {
               <tr>
                 <th>Student Name</th>
                 <th>Class</th>
+                <th>Section</th>
                 <th>Roll No</th>
                 <th>Guardian</th>
                 <th>Phone</th>
+                <th>Attendance %</th>
+                <th>Fee Status</th>
                 <th>Status</th>
                 <th style={{ width: 180 }}>Actions</th>
               </tr>
@@ -240,7 +322,7 @@ export default function StudentsPage() {
             <tbody>
               {filteredStudents.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="text-center py-4">
+                  <td colSpan={10} className="text-center py-4">
                     No students found
                   </td>
                 </tr>
@@ -249,11 +331,20 @@ export default function StudentsPage() {
                   <tr key={student.id}>
                     <td>{student.name}</td>
                     <td>{student.className}</td>
+                    <td>{student.section || '-'}</td>
                     <td>{student.rollNo}</td>
                     <td>{student.guardianName}</td>
                     <td>{student.phone}</td>
+                    <td>{student.attendancePercentage ?? 0}%</td>
                     <td>
-                      <Badge bg={statusVariant(student.status)}>{student.status}</Badge>
+                      <Badge bg={feeVariant(student.feeStatus)}>
+                        {student.feeStatus}
+                      </Badge>
+                    </td>
+                    <td>
+                      <Badge bg={statusVariant(student.status)}>
+                        {student.status}
+                      </Badge>
                     </td>
                     <td>
                       <div className="d-flex gap-2">
@@ -284,7 +375,9 @@ export default function StudentsPage() {
       <Modal show={showModal} onHide={closeModal} centered>
         <Form onSubmit={onSubmit}>
           <Modal.Header closeButton>
-            <Modal.Title>{editingId ? 'Edit Student' : 'Add Student'}</Modal.Title>
+            <Modal.Title>
+              {editingId ? 'Edit Student' : 'Add Student'}
+            </Modal.Title>
           </Modal.Header>
 
           <Modal.Body>
@@ -313,10 +406,26 @@ export default function StudentsPage() {
                     value={form.className}
                     onChange={onChange}
                     isInvalid={!!errors.className}
-                    placeholder="Example: 8-A"
+                    placeholder="Example: 8"
                   />
                   <Form.Control.Feedback type="invalid">
                     {errors.className}
+                  </Form.Control.Feedback>
+                </Form.Group>
+              </Col>
+
+              <Col md={6}>
+                <Form.Group>
+                  <Form.Label>Section</Form.Label>
+                  <Form.Control
+                    name="section"
+                    value={form.section}
+                    onChange={onChange}
+                    isInvalid={!!errors.section}
+                    placeholder="Example: A"
+                  />
+                  <Form.Control.Feedback type="invalid">
+                    {errors.section}
                   </Form.Control.Feedback>
                 </Form.Group>
               </Col>
@@ -333,6 +442,25 @@ export default function StudentsPage() {
                   />
                   <Form.Control.Feedback type="invalid">
                     {errors.rollNo}
+                  </Form.Control.Feedback>
+                </Form.Group>
+              </Col>
+
+              <Col md={6}>
+                <Form.Group>
+                  <Form.Label>Attendance Percentage</Form.Label>
+                  <Form.Control
+                    name="attendancePercentage"
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={form.attendancePercentage}
+                    onChange={onChange}
+                    isInvalid={!!errors.attendancePercentage}
+                    placeholder="Enter attendance %"
+                  />
+                  <Form.Control.Feedback type="invalid">
+                    {errors.attendancePercentage}
                   </Form.Control.Feedback>
                 </Form.Group>
               </Col>
@@ -371,8 +499,27 @@ export default function StudentsPage() {
 
               <Col md={6}>
                 <Form.Group>
+                  <Form.Label>Fee Status</Form.Label>
+                  <Form.Select
+                    name="feeStatus"
+                    value={form.feeStatus}
+                    onChange={onChange}
+                  >
+                    <option value="Paid">Paid</option>
+                    <option value="Partial">Partial</option>
+                    <option value="Pending">Pending</option>
+                  </Form.Select>
+                </Form.Group>
+              </Col>
+
+              <Col md={6}>
+                <Form.Group>
                   <Form.Label>Status</Form.Label>
-                  <Form.Select name="status" value={form.status} onChange={onChange}>
+                  <Form.Select
+                    name="status"
+                    value={form.status}
+                    onChange={onChange}
+                  >
                     <option value="Active">Active</option>
                     <option value="Inactive">Inactive</option>
                   </Form.Select>
