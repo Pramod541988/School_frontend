@@ -25,7 +25,7 @@ const emptyForm = {
 };
 
 export default function StudentsPage() {
-  const [students, setStudents] = useState(initialStudents);
+  const [students, setStudents] = useState([]);
   const [query, setQuery] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -91,8 +91,8 @@ export default function StudentsPage() {
 
   const onChange = (e) => {
     const { name, value } = e.target;
-    setForm((s) => ({ ...s, [name]: value }));
-    setErrors((s) => ({ ...s, [name]: '' }));
+    setForm((prev) => ({ ...prev, [name]: value }));
+    setErrors((prev) => ({ ...prev, [name]: '' }));
   };
 
   const validate = () => {
@@ -102,6 +102,7 @@ export default function StudentsPage() {
     if (!form.className.trim()) nextErrors.className = 'Class is required';
     if (!form.rollNo.trim()) nextErrors.rollNo = 'Roll number is required';
     if (!form.guardianName.trim()) nextErrors.guardianName = 'Guardian name is required';
+
     if (!form.phone.trim()) {
       nextErrors.phone = 'Phone number is required';
     } else if (!/^[0-9]{10}$/.test(form.phone.trim())) {
@@ -169,7 +170,7 @@ export default function StudentsPage() {
     >
       <PageHeader
         title="Students Section"
-        subtitle="This page is now ready for student listing, search, add, edit, and delete. Backend CRUD can be wired next without changing the layout."
+        subtitle="This page is ready for student listing, search, add, edit, and delete. Backend CRUD can be connected next without changing the layout."
         buttonText="Add Student"
         onClick={openAddModal}
       />
@@ -183,6 +184,7 @@ export default function StudentsPage() {
             </Card.Body>
           </Card>
         </Col>
+
         <Col md={4}>
           <Card className="card-soft h-100">
             <Card.Body>
@@ -191,6 +193,7 @@ export default function StudentsPage() {
             </Card.Body>
           </Card>
         </Col>
+
         <Col md={4}>
           <Card className="card-soft h-100">
             <Card.Body>
@@ -214,6 +217,7 @@ export default function StudentsPage() {
                 />
               </InputGroup>
             </Col>
+
             <Col className="text-md-end">
               <Button variant="primary" onClick={openAddModal}>
                 Add Student
