@@ -15,36 +15,6 @@ import {
 import AdminLayout from '@/components/AdminLayout';
 import PageHeader from '@/components/PageHeader';
 
-const initialStudents = [
-  {
-    id: 1,
-    name: 'Aarav Kumar',
-    className: '8-A',
-    rollNo: '18',
-    guardianName: 'Ravi Kumar',
-    phone: '9876543210',
-    status: 'Active',
-  },
-  {
-    id: 2,
-    name: 'Diya Kumar',
-    className: '5-B',
-    rollNo: '09',
-    guardianName: 'Ravi Kumar',
-    phone: '9876543211',
-    status: 'Active',
-  },
-  {
-    id: 3,
-    name: 'Megha S',
-    className: '9-B',
-    rollNo: '12',
-    guardianName: 'Suresh',
-    phone: '9876543212',
-    status: 'Inactive',
-  },
-];
-
 const emptyForm = {
   name: '',
   className: '',
