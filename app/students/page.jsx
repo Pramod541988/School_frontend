@@ -35,12 +35,7 @@ function getApiBase() {
 
 function getAuthToken() {
   if (typeof window === 'undefined') return '';
-  return (
-    localStorage.getItem('school_admin_token') ||
-    localStorage.getItem('token') ||
-    localStorage.getItem('access_token') ||
-    ''
-  );
+  return localStorage.getItem('ss_admin_token') || '';
 }
 
 function authHeaders(extra = {}) {
