@@ -81,7 +81,7 @@ export default function TimetablePage() {
   const [query, setQuery] = useState('');
   const [classFilter, setClassFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('Regular');
-  const [dayFilter, setDayFilter] = useState('');
+  const [dayFilter, setDayFilter] = useState('Monday');
 
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -105,7 +105,12 @@ export default function TimetablePage() {
     });
     const data = await readJsonSafe(res);
     if (!res.ok) throw new Error(data?.detail || 'Failed to load classes');
-    setClasses(Array.isArray(data) ? data : []);
+    const rows = Array.isArray(data) ? data : [];
+    setClasses(rows);
+
+    if (!classFilter && rows.length > 0) {
+      setClassFilter(String(rows[0].id));
+    }
   }
 
   async function loadTeachers() {
@@ -119,12 +124,17 @@ export default function TimetablePage() {
     setTeachers(Array.isArray(data?.items) ? data.items : []);
   }
 
-  async function loadEntries() {
+  async function loadEntries({
+    selectedClass = classFilter,
+    selectedType = typeFilter,
+    selectedDay = dayFilter,
+    selectedQuery = query,
+  } = {}) {
     const params = new URLSearchParams();
-    if (classFilter) params.set('class_id', classFilter);
-    if (typeFilter) params.set('timetable_type', typeFilter);
-    if (dayFilter) params.set('day_name', dayFilter);
-    if (query.trim()) params.set('search', query.trim());
+    if (selectedClass) params.set('class_id', selectedClass);
+    if (selectedType) params.set('timetable_type', selectedType);
+    if (selectedDay) params.set('day_name', selectedDay);
+    if (selectedQuery?.trim()) params.set('search', selectedQuery.trim());
 
     const qs = params.toString();
     const res = await fetch(`${API_BASE}/admin/timetables${qs ? `?${qs}` : ''}`, {
@@ -137,7 +147,7 @@ export default function TimetablePage() {
     setEntries(Array.isArray(data?.items) ? data.items : []);
   }
 
-  async function refreshAll() {
+  async function refreshBaseData() {
     if (!API_BASE) {
       setPageError('NEXT_PUBLIC_API_BASE is missing');
       return;
@@ -146,7 +156,7 @@ export default function TimetablePage() {
     try {
       setLoading(true);
       setPageError('');
-      await Promise.all([loadClasses(), loadTeachers(), loadEntries()]);
+      await Promise.all([loadClasses(), loadTeachers()]);
     } catch (err) {
       setPageError(err?.message || 'Failed to load timetable data');
     } finally {
@@ -155,45 +165,51 @@ export default function TimetablePage() {
   }
 
   useEffect(() => {
-    refreshAll();
+    refreshBaseData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    if (!API_BASE) return;
+    if (!API_BASE || !classFilter) return;
+
     const t = setTimeout(() => {
+      setLoading(true);
       loadEntries().catch((err) => {
         setPageError(err?.message || 'Failed to load timetable entries');
+      }).finally(() => {
+        setLoading(false);
       });
     }, 250);
+
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [classFilter, typeFilter, dayFilter, query]);
+  }, [API_BASE, classFilter, typeFilter, dayFilter, query]);
+
+  const selectedClassName = useMemo(() => {
+    const found = classes.find((x) => String(x.id) === String(classFilter));
+    return found?.name || 'Selected Class';
+  }, [classes, classFilter]);
 
   const stats = useMemo(() => {
     return {
       total: entries.length,
-      regular: entries.filter((x) => x.timetable_type === 'Regular').length,
+      active: entries.filter((x) => x.status === 'Active').length,
       tests: entries.filter((x) => x.timetable_type === 'Test').length,
       exams: entries.filter((x) => x.timetable_type === 'Exam').length,
     };
   }, [entries]);
 
-  const groupedRows = useMemo(() => {
-    const grouped = {};
-    DAY_OPTIONS.forEach((day) => {
-      grouped[day] = entries
-        .filter((item) => item.day_name === day)
-        .sort((a, b) => Number(a.period_no || 0) - Number(b.period_no || 0));
-    });
-    return grouped;
+  const sortedEntries = useMemo(() => {
+    return [...entries].sort((a, b) => Number(a.period_no || 0) - Number(b.period_no || 0));
   }, [entries]);
 
   function resetForm() {
     setEditingId(null);
     setForm({
       ...emptyForm,
+      class_id: classFilter || '',
       timetable_type: typeFilter || 'Regular',
+      day_name: dayFilter || 'Monday',
     });
     setErrors({});
   }
@@ -235,7 +251,6 @@ export default function TimetablePage() {
     if (!form.day_name) nextErrors.day_name = 'Day is required';
     if (!String(form.period_no).trim()) nextErrors.period_no = 'Period number is required';
     if (!form.subject.trim()) nextErrors.subject = 'Subject is required';
-
     setErrors(nextErrors);
     return Object.keys(nextErrors).length === 0;
   }
@@ -274,7 +289,6 @@ export default function TimetablePage() {
       });
 
       const data = await readJsonSafe(res);
-
       if (!res.ok) {
         throw new Error(data?.detail || 'Failed to save timetable entry');
       }
@@ -291,7 +305,7 @@ export default function TimetablePage() {
 
   async function handleDelete(item) {
     const ok = window.confirm(
-      `Delete ${item.timetable_type} timetable entry for ${item.class_name} on ${item.day_name}, period ${item.period_no}?`
+      `Delete ${item.subject} for ${item.class_name} on ${item.day_name}, period ${item.period_no}?`
     );
     if (!ok) return;
 
@@ -305,7 +319,6 @@ export default function TimetablePage() {
       });
 
       const data = await readJsonSafe(res);
-
       if (!res.ok) {
         throw new Error(data?.detail || 'Failed to delete timetable entry');
       }
@@ -320,43 +333,8 @@ export default function TimetablePage() {
   return (
     <AdminLayout
       title="Timetable"
-      subtitle="Create class-wise Regular, Test and Exam schedules."
+      subtitle="Select a class, then view its day-wise schedule cleanly."
     >
-      <Row className="g-3 mb-3">
-        <Col md={3}>
-          <Card className="shadow-sm border-0">
-            <Card.Body>
-              <div className="text-muted small">Total Entries</div>
-              <div className="fs-3 fw-bold">{stats.total}</div>
-            </Card.Body>
-          </Card>
-        </Col>
-        <Col md={3}>
-          <Card className="shadow-sm border-0">
-            <Card.Body>
-              <div className="text-muted small">Regular</div>
-              <div className="fs-3 fw-bold text-primary">{stats.regular}</div>
-            </Card.Body>
-          </Card>
-        </Col>
-        <Col md={3}>
-          <Card className="shadow-sm border-0">
-            <Card.Body>
-              <div className="text-muted small">Tests</div>
-              <div className="fs-3 fw-bold text-warning">{stats.tests}</div>
-            </Card.Body>
-          </Card>
-        </Col>
-        <Col md={3}>
-          <Card className="shadow-sm border-0">
-            <Card.Body>
-              <div className="text-muted small">Exams</div>
-              <div className="fs-3 fw-bold text-danger">{stats.exams}</div>
-            </Card.Body>
-          </Card>
-        </Col>
-      </Row>
-
       {pageError ? (
         <Alert variant="danger" onClose={() => setPageError('')} dismissible>
           {pageError}
@@ -369,24 +347,48 @@ export default function TimetablePage() {
         </Alert>
       ) : null}
 
+      <Row className="g-3 mb-3">
+        <Col md={3}>
+          <Card className="shadow-sm border-0">
+            <Card.Body>
+              <div className="text-muted small">Selected Class</div>
+              <div className="fs-4 fw-bold">{selectedClassName}</div>
+            </Card.Body>
+          </Card>
+        </Col>
+        <Col md={3}>
+          <Card className="shadow-sm border-0">
+            <Card.Body>
+              <div className="text-muted small">Day</div>
+              <div className="fs-4 fw-bold">{dayFilter}</div>
+            </Card.Body>
+          </Card>
+        </Col>
+        <Col md={3}>
+          <Card className="shadow-sm border-0">
+            <Card.Body>
+              <div className="text-muted small">Type</div>
+              <div className="fs-4 fw-bold">{typeFilter}</div>
+            </Card.Body>
+          </Card>
+        </Col>
+        <Col md={3}>
+          <Card className="shadow-sm border-0">
+            <Card.Body>
+              <div className="text-muted small">Entries</div>
+              <div className="fs-4 fw-bold">{stats.total}</div>
+            </Card.Body>
+          </Card>
+        </Col>
+      </Row>
+
       <Card className="shadow-sm border-0 mb-3">
         <Card.Body>
           <Row className="g-3 align-items-end">
-            <Col md={3}>
-              <Form.Label>Search</Form.Label>
-              <InputGroup>
-                <Form.Control
-                  placeholder="Subject, room, teacher..."
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                />
-              </InputGroup>
-            </Col>
-
-            <Col md={3}>
+            <Col md={4}>
               <Form.Label>Class</Form.Label>
               <Form.Select value={classFilter} onChange={(e) => setClassFilter(e.target.value)}>
-                <option value="">All Classes</option>
+                <option value="">Select class</option>
                 {classes.map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.name}
@@ -395,8 +397,8 @@ export default function TimetablePage() {
               </Form.Select>
             </Col>
 
-            <Col md={2}>
-              <Form.Label>Type</Form.Label>
+            <Col md={3}>
+              <Form.Label>Timetable Type</Form.Label>
               <Form.Select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
                 {TIMETABLE_TYPES.map((item) => (
                   <option key={item} value={item}>
@@ -406,10 +408,9 @@ export default function TimetablePage() {
               </Form.Select>
             </Col>
 
-            <Col md={2}>
-              <Form.Label>Day</Form.Label>
+            <Col md={3}>
+              <Form.Label>Day Reference</Form.Label>
               <Form.Select value={dayFilter} onChange={(e) => setDayFilter(e.target.value)}>
-                <option value="">All Days</option>
                 {DAY_OPTIONS.map((item) => (
                   <option key={item} value={item}>
                     {item}
@@ -419,7 +420,22 @@ export default function TimetablePage() {
             </Col>
 
             <Col md={2} className="d-grid">
-              <Button onClick={openAddModal}>Add Entry</Button>
+              <Button onClick={openAddModal} disabled={!classFilter}>
+                Add Entry
+              </Button>
+            </Col>
+          </Row>
+
+          <Row className="g-3 mt-1">
+            <Col md={12}>
+              <Form.Label>Search</Form.Label>
+              <InputGroup>
+                <Form.Control
+                  placeholder="Search subject, room, teacher..."
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+              </InputGroup>
             </Col>
           </Row>
         </Card.Body>
@@ -429,85 +445,86 @@ export default function TimetablePage() {
         <Card.Body>
           <div className="d-flex justify-content-between align-items-center mb-3">
             <div>
-              <h5 className="mb-1">Class Timetable</h5>
-              <div className="text-muted small">
-                One class can have separate Regular, Test and Exam schedules.
+              <h4 className="mb-1">{selectedClassName}</h4>
+              <div className="text-muted">
+                {dayFilter} • {typeFilter} timetable
               </div>
             </div>
             {loading ? <Spinner animation="border" size="sm" /> : null}
           </div>
 
-          {DAY_OPTIONS.map((day) => (
-            <div key={day} className="mb-4">
-              <div className="d-flex align-items-center justify-content-between mb-2">
-                <h6 className="mb-0">{day}</h6>
-                <Badge bg="light" text="dark">
-                  {groupedRows[day]?.length || 0} entries
-                </Badge>
-              </div>
-
-              <Table responsive bordered hover size="sm" className="align-middle">
-                <thead>
-                  <tr>
-                    <th style={{ minWidth: 90 }}>Period</th>
-                    <th style={{ minWidth: 120 }}>Type</th>
-                    <th style={{ minWidth: 140 }}>Class</th>
-                    <th style={{ minWidth: 140 }}>Subject</th>
-                    <th style={{ minWidth: 150 }}>Teacher</th>
-                    <th style={{ minWidth: 130 }}>Time</th>
-                    <th style={{ minWidth: 100 }}>Room</th>
-                    <th style={{ minWidth: 120 }}>Status</th>
-                    <th style={{ minWidth: 180 }}>Remark</th>
-                    <th style={{ minWidth: 150 }}>Action</th>
+          <Table responsive bordered hover className="align-middle">
+            <thead>
+              <tr>
+                <th style={{ minWidth: 90 }}>Period</th>
+                <th style={{ minWidth: 140 }}>Subject</th>
+                <th style={{ minWidth: 160 }}>Teacher</th>
+                <th style={{ minWidth: 140 }}>Time</th>
+                <th style={{ minWidth: 100 }}>Room</th>
+                <th style={{ minWidth: 100 }}>Status</th>
+                <th style={{ minWidth: 180 }}>Remark</th>
+                <th style={{ minWidth: 160 }}>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedEntries.length ? (
+                sortedEntries.map((item) => (
+                  <tr key={item.id}>
+                    <td>
+                      <div className="fw-semibold">P{item.period_no}</div>
+                      <div className="text-muted small">{item.period_label || '-'}</div>
+                    </td>
+                    <td>
+                      <div className="fw-semibold">{item.subject || '-'}</div>
+                      <div className="mt-1">
+                        <Badge bg={typeVariant(item.timetable_type)}>{item.timetable_type}</Badge>
+                      </div>
+                    </td>
+                    <td>{item.teacher_name || '-'}</td>
+                    <td>
+                      {item.start_time || item.end_time
+                        ? `${item.start_time || '--'} - ${item.end_time || '--'}`
+                        : '-'}
+                    </td>
+                    <td>{item.room || '-'}</td>
+                    <td>
+                      <Badge bg={statusVariant(item.status)}>{item.status}</Badge>
+                    </td>
+                    <td>{item.remark || '-'}</td>
+                    <td>
+                      <div className="d-flex gap-2">
+                        <Button size="sm" variant="outline-primary" onClick={() => openEditModal(item)}>
+                          Edit
+                        </Button>
+                        <Button size="sm" variant="outline-danger" onClick={() => handleDelete(item)}>
+                          Delete
+                        </Button>
+                      </div>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {groupedRows[day]?.length ? (
-                    groupedRows[day].map((item) => (
-                      <tr key={item.id}>
-                        <td>
-                          <div className="fw-semibold">P{item.period_no}</div>
-                          <div className="text-muted small">{item.period_label || '-'}</div>
-                        </td>
-                        <td>
-                          <Badge bg={typeVariant(item.timetable_type)}>{item.timetable_type}</Badge>
-                        </td>
-                        <td>{item.class_name}</td>
-                        <td>{item.subject || '-'}</td>
-                        <td>{item.teacher_name || '-'}</td>
-                        <td>
-                          {item.start_time || item.end_time
-                            ? `${item.start_time || '--'} - ${item.end_time || '--'}`
-                            : '-'}
-                        </td>
-                        <td>{item.room || '-'}</td>
-                        <td>
-                          <Badge bg={statusVariant(item.status)}>{item.status}</Badge>
-                        </td>
-                        <td>{item.remark || '-'}</td>
-                        <td>
-                          <div className="d-flex gap-2">
-                            <Button size="sm" variant="outline-primary" onClick={() => openEditModal(item)}>
-                              Edit
-                            </Button>
-                            <Button size="sm" variant="outline-danger" onClick={() => handleDelete(item)}>
-                              Delete
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td colSpan={10} className="text-center text-muted py-3">
-                        No entries for {day}
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </Table>
-            </div>
-          ))}
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={8} className="text-center text-muted py-4">
+                    No entries for {selectedClassName} on {dayFilter} under {typeFilter} timetable
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </Table>
+
+          <div className="d-flex flex-wrap gap-2 mt-2">
+            {DAY_OPTIONS.map((day) => (
+              <Button
+                key={day}
+                size="sm"
+                variant={dayFilter === day ? 'primary' : 'outline-secondary'}
+                onClick={() => setDayFilter(day)}
+              >
+                {day}
+              </Button>
+            ))}
+          </div>
         </Card.Body>
       </Card>
 
@@ -539,7 +556,6 @@ export default function TimetablePage() {
               <Form.Select
                 value={form.timetable_type}
                 onChange={(e) => setForm((prev) => ({ ...prev, timetable_type: e.target.value }))}
-                isInvalid={!!errors.timetable_type}
               >
                 {TIMETABLE_TYPES.map((item) => (
                   <option key={item} value={item}>
@@ -554,7 +570,6 @@ export default function TimetablePage() {
               <Form.Select
                 value={form.day_name}
                 onChange={(e) => setForm((prev) => ({ ...prev, day_name: e.target.value }))}
-                isInvalid={!!errors.day_name}
               >
                 {DAY_OPTIONS.map((item) => (
                   <option key={item} value={item}>
