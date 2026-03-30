@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Badge,
   Button,
@@ -23,14 +23,27 @@ const emptyForm = {
   status: 'Active',
 };
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE;
+function getApiBase() {
+  return (process.env.NEXT_PUBLIC_API_BASE || '').replace(/\/$/, '');
+}
 
-function getToken() {
+function getAuthToken() {
   if (typeof window === 'undefined') return '';
-  return localStorage.getItem('token') || '';
+  return localStorage.getItem('ss_admin_token') || '';
+}
+
+function authHeaders(extra = {}) {
+  const token = getAuthToken();
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...extra,
+  };
 }
 
 export default function ClassesPage() {
+  const API_BASE = getApiBase();
+
   const [classes, setClasses] = useState([]);
   const [query, setQuery] = useState('');
   const [showModal, setShowModal] = useState(false);
@@ -38,21 +51,39 @@ export default function ClassesPage() {
   const [form, setForm] = useState(emptyForm);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
 
-  const headers = {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${getToken()}`
-  };
+  async function readJsonSafe(res) {
+    const text = await res.text();
+    try {
+      return text ? JSON.parse(text) : {};
+    } catch {
+      return { detail: text || 'Unexpected server response' };
+    }
+  }
 
   async function loadClasses() {
+    if (!API_BASE) {
+      setError('NEXT_PUBLIC_API_BASE is missing');
+      return;
+    }
+
     setLoading(true);
+    setError('');
+
     try {
-      const res = await fetch(`${API_BASE}/admin/classes`, { headers });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail);
-      setClasses(data);
+      const res = await fetch(`${API_BASE}/admin/classes`, {
+        method: 'GET',
+        headers: authHeaders(),
+        cache: 'no-store',
+      });
+
+      const data = await readJsonSafe(res);
+      if (!res.ok) throw new Error(data?.detail || 'Failed to load classes');
+
+      setClasses(Array.isArray(data) ? data : []);
     } catch (e) {
-      setError(e.message);
+      setError(e.message || 'Failed to load classes');
     } finally {
       setLoading(false);
     }
@@ -61,6 +92,23 @@ export default function ClassesPage() {
   useEffect(() => {
     loadClasses();
   }, []);
+
+  const filteredClasses = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return classes;
+
+    return classes.filter((item) =>
+      [
+        item.name,
+        ...(item.sections || []),
+        item.class_teacher,
+        item.status,
+      ]
+        .join(' ')
+        .toLowerCase()
+        .includes(q)
+    );
+  }, [classes, query]);
 
   const openAddModal = () => {
     setEditingId(null);
@@ -71,87 +119,109 @@ export default function ClassesPage() {
   const openEditModal = (item) => {
     setEditingId(item.id);
     setForm({
-      name: item.name,
-      sectionsText: item.sections.join(', '),
-      classTeacher: item.class_teacher,
-      status: item.status
+      name: item.name || '',
+      sectionsText: Array.isArray(item.sections) ? item.sections.join(', ') : '',
+      classTeacher: item.class_teacher || '',
+      status: item.status || 'Active',
     });
     setShowModal(true);
   };
 
   const onSubmit = async (e) => {
     e.preventDefault();
+    if (!API_BASE) {
+      setError('NEXT_PUBLIC_API_BASE is missing');
+      return;
+    }
 
-    const payload = {
-      name: form.name,
-      sections: form.sectionsText.split(',').map(s => s.trim()),
-      class_teacher: form.classTeacher,
-      status: form.status
-    };
+    setSaving(true);
 
-    const url = editingId
-      ? `${API_BASE}/admin/classes/${editingId}`
-      : `${API_BASE}/admin/classes`;
+    try {
+      const payload = {
+        name: form.name.trim(),
+        sections: form.sectionsText
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean),
+        class_teacher: form.classTeacher.trim(),
+        status: form.status,
+      };
 
-    const method = editingId ? 'PUT' : 'POST';
+      const url = editingId
+        ? `${API_BASE}/admin/classes/${editingId}`
+        : `${API_BASE}/admin/classes`;
 
-    const res = await fetch(url, {
-      method,
-      headers,
-      body: JSON.stringify(payload)
-    });
+      const method = editingId ? 'PUT' : 'POST';
 
-    const data = await res.json();
-    if (!res.ok) return alert(data.detail);
+      const res = await fetch(url, {
+        method,
+        headers: authHeaders(),
+        body: JSON.stringify(payload),
+      });
 
-    loadClasses();
-    setShowModal(false);
+      const data = await readJsonSafe(res);
+      if (!res.ok) throw new Error(data?.detail || 'Failed to save class');
+
+      await loadClasses();
+      setShowModal(false);
+    } catch (err) {
+      alert(err?.message || 'Failed to save class');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const deleteClass = async (id) => {
     if (!confirm('Delete class?')) return;
+    if (!API_BASE) {
+      setError('NEXT_PUBLIC_API_BASE is missing');
+      return;
+    }
 
-    const res = await fetch(`${API_BASE}/admin/classes/${id}`, {
-      method: 'DELETE',
-      headers
-    });
+    try {
+      const res = await fetch(`${API_BASE}/admin/classes/${id}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      });
 
-    const data = await res.json();
-    if (!res.ok) return alert(data.detail);
+      const data = await readJsonSafe(res);
+      if (!res.ok) throw new Error(data?.detail || 'Failed to delete class');
 
-    loadClasses();
+      await loadClasses();
+    } catch (err) {
+      alert(err?.message || 'Failed to delete class');
+    }
   };
 
   return (
-    <AdminLayout title="Classes">
-
-      {error && <Alert variant="danger">{error}</Alert>}
+    <AdminLayout title="Classes" subtitle="Create classes, sections, and class teachers.">
+      {error ? <Alert variant="danger">{error}</Alert> : null}
 
       <Card>
         <Card.Body>
-
           <Row className="mb-3">
-            <Col>
+            <Col md={8}>
               <InputGroup>
                 <InputGroup.Text>Search</InputGroup.Text>
                 <Form.Control
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search class, section, teacher"
                 />
               </InputGroup>
             </Col>
 
-            <Col className="text-end">
+            <Col md={4} className="text-end">
               <Button onClick={openAddModal}>Add Class</Button>
             </Col>
           </Row>
 
           {loading ? (
-            <div className="text-center">
+            <div className="text-center py-4">
               <Spinner />
             </div>
           ) : (
-            <Table hover>
+            <Table hover responsive>
               <thead>
                 <tr>
                   <th>Class</th>
@@ -162,67 +232,89 @@ export default function ClassesPage() {
                 </tr>
               </thead>
               <tbody>
-                {classes.map(c => (
-                  <tr key={c.id}>
-                    <td>{c.name}</td>
-                    <td>{c.sections.join(', ')}</td>
-                    <td>{c.class_teacher}</td>
-                    <td>
-                      <Badge bg="success">{c.status}</Badge>
-                    </td>
-                    <td>
-                      <Button size="sm" onClick={() => openEditModal(c)}>Edit</Button>{' '}
-                      <Button size="sm" variant="danger" onClick={() => deleteClass(c.id)}>Delete</Button>
-                    </td>
+                {filteredClasses.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="text-center py-4">No classes found</td>
                   </tr>
-                ))}
+                ) : (
+                  filteredClasses.map((c) => (
+                    <tr key={c.id}>
+                      <td>{c.name}</td>
+                      <td>{(c.sections || []).join(', ')}</td>
+                      <td>{c.class_teacher}</td>
+                      <td>
+                        <Badge bg={c.status === 'Active' ? 'success' : 'secondary'}>
+                          {c.status}
+                        </Badge>
+                      </td>
+                      <td>
+                        <Button size="sm" onClick={() => openEditModal(c)}>Edit</Button>{' '}
+                        <Button size="sm" variant="danger" onClick={() => deleteClass(c.id)}>
+                          Delete
+                        </Button>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </Table>
           )}
-
         </Card.Body>
       </Card>
 
-      <Modal show={showModal} onHide={() => setShowModal(false)}>
+      <Modal show={showModal} onHide={() => setShowModal(false)} centered>
         <Form onSubmit={onSubmit}>
           <Modal.Header closeButton>
-            <Modal.Title>{editingId ? 'Edit' : 'Add'} Class</Modal.Title>
+            <Modal.Title>{editingId ? 'Edit Class' : 'Add Class'}</Modal.Title>
           </Modal.Header>
-
           <Modal.Body>
-
-            <Form.Group>
-              <Form.Label>Class</Form.Label>
+            <Form.Group className="mb-3">
+              <Form.Label>Class Name</Form.Label>
               <Form.Control
                 value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                onChange={(e) => setForm((s) => ({ ...s, name: e.target.value }))}
+                required
               />
             </Form.Group>
 
-            <Form.Group className="mt-2">
+            <Form.Group className="mb-3">
               <Form.Label>Sections</Form.Label>
               <Form.Control
                 value={form.sectionsText}
-                onChange={(e) => setForm({ ...form, sectionsText: e.target.value })}
+                onChange={(e) => setForm((s) => ({ ...s, sectionsText: e.target.value }))}
+                placeholder="A, B, C"
               />
             </Form.Group>
 
-            <Form.Group className="mt-2">
-              <Form.Label>Teacher</Form.Label>
+            <Form.Group className="mb-3">
+              <Form.Label>Class Teacher</Form.Label>
               <Form.Control
                 value={form.classTeacher}
-                onChange={(e) => setForm({ ...form, classTeacher: e.target.value })}
+                onChange={(e) => setForm((s) => ({ ...s, classTeacher: e.target.value }))}
               />
             </Form.Group>
 
+            <Form.Group>
+              <Form.Label>Status</Form.Label>
+              <Form.Select
+                value={form.status}
+                onChange={(e) => setForm((s) => ({ ...s, status: e.target.value }))}
+              >
+                <option value="Active">Active</option>
+                <option value="Inactive">Inactive</option>
+              </Form.Select>
+            </Form.Group>
           </Modal.Body>
-
           <Modal.Footer>
-            <Button type="submit">Save</Button>
+            <Button variant="secondary" onClick={() => setShowModal(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={saving}>
+              {saving ? 'Saving...' : editingId ? 'Update' : 'Create'}
+            </Button>
           </Modal.Footer>
         </Form>
       </Modal>
-
     </AdminLayout>
   );
 }
