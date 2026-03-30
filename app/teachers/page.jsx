@@ -16,12 +16,21 @@ import {
 } from 'react-bootstrap';
 import AdminLayout from '@/components/AdminLayout';
 
+const SUBJECT_OPTIONS = [
+  'Kannada',
+  'English',
+  'Hindi',
+  'Mathematics',
+  'Science',
+  'EVS',
+];
+
 const emptyForm = {
   teacherName: '',
   employeeId: '',
   phone: '',
   email: '',
-  subjects: '',
+  subjects: [],
   status: 'Active',
   selectedClassId: '',
   linkedClasses: [],
@@ -50,6 +59,15 @@ function statusVariant(status) {
   if (status === 'Active') return 'success';
   if (status === 'Inactive') return 'secondary';
   return 'warning';
+}
+
+function parseSubjects(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.filter(Boolean);
+  return String(value)
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 export default function TeachersPage() {
@@ -166,7 +184,7 @@ export default function TeachersPage() {
       employeeId: teacher.employee_id || '',
       phone: teacher.phone || '',
       email: teacher.email || '',
-      subjects: teacher.subjects || '',
+      subjects: parseSubjects(teacher.subjects),
       status: teacher.status || 'Active',
       selectedClassId: '',
       linkedClasses: (teacher.classes || []).map((c) => ({
@@ -220,10 +238,20 @@ export default function TeachersPage() {
   };
 
   const removeLinkedClass = (classId) => {
-    setForm((prev) => ({
-      ...prev,
-      linkedClasses: prev.linkedClasses.filter((x) => x.id !== classId),
-    }));
+    setForm((prev) => {
+      const nextLinked = prev.linkedClasses.filter((x) => x.id !== classId);
+      const hasPrimary = nextLinked.some((x) => x.is_primary);
+
+      return {
+        ...prev,
+        linkedClasses: hasPrimary
+          ? nextLinked
+          : nextLinked.map((x, index) => ({
+              ...x,
+              is_primary: index === 0,
+            })),
+      };
+    });
   };
 
   const setPrimaryClass = (classId) => {
@@ -250,6 +278,10 @@ export default function TeachersPage() {
       nextErrors.email = 'Invalid email address';
     }
 
+    if (form.subjects.length === 0) {
+      nextErrors.subjects = 'Please select at least one subject';
+    }
+
     if (form.linkedClasses.length === 0) {
       nextErrors.linkedClasses = 'Please link at least one class';
     }
@@ -267,7 +299,7 @@ export default function TeachersPage() {
       employee_id: form.employeeId.trim(),
       phone: form.phone.trim(),
       email: form.email.trim(),
-      subjects: form.subjects.trim(),
+      subjects: form.subjects.join(', '),
       status: form.status,
       set_as_primary_teacher: form.setAsPrimaryTeacher,
       class_links: form.linkedClasses.map((x) => ({
@@ -444,7 +476,19 @@ export default function TeachersPage() {
                       <td>{teacher.teacher_name}</td>
                       <td>{teacher.employee_id}</td>
                       <td>{teacher.phone || '-'}</td>
-                      <td>{teacher.subjects || '-'}</td>
+                      <td>
+                        {teacher.subjects ? (
+                          <div className="d-flex flex-wrap gap-1">
+                            {parseSubjects(teacher.subjects).map((subject) => (
+                              <Badge key={subject} bg="info">
+                                {subject}
+                              </Badge>
+                            ))}
+                          </div>
+                        ) : (
+                          '-'
+                        )}
+                      </td>
                       <td>
                         <div className="d-flex flex-wrap gap-1">
                           {(teacher.classes || []).map((c) => (
@@ -561,12 +605,45 @@ export default function TeachersPage() {
               <Col md={12}>
                 <Form.Group>
                   <Form.Label>Subjects</Form.Label>
-                  <Form.Control
-                    name="subjects"
+                  <Form.Select
+                    multiple
                     value={form.subjects}
-                    onChange={onChange}
-                    placeholder="Maths, Science, English"
-                  />
+                    onChange={(e) => {
+                      const values = Array.from(
+                        e.target.selectedOptions,
+                        (option) => option.value
+                      );
+                      setForm((prev) => ({
+                        ...prev,
+                        subjects: values,
+                      }));
+                      setErrors((prev) => ({ ...prev, subjects: '' }));
+                    }}
+                    isInvalid={!!errors.subjects}
+                    style={{ minHeight: 140 }}
+                  >
+                    {SUBJECT_OPTIONS.map((subject) => (
+                      <option key={subject} value={subject}>
+                        {subject}
+                      </option>
+                    ))}
+                  </Form.Select>
+                  <Form.Control.Feedback type="invalid">
+                    {errors.subjects}
+                  </Form.Control.Feedback>
+                  <div className="small text-muted mt-1">
+                    Hold Ctrl (Windows) or Cmd (Mac) to select multiple subjects
+                  </div>
+
+                  {form.subjects.length > 0 ? (
+                    <div className="d-flex flex-wrap gap-1 mt-2">
+                      {form.subjects.map((subject) => (
+                        <Badge key={subject} bg="info">
+                          {subject}
+                        </Badge>
+                      ))}
+                    </div>
+                  ) : null}
                 </Form.Group>
               </Col>
 
@@ -645,9 +722,7 @@ export default function TeachersPage() {
                             className="d-flex flex-wrap justify-content-between align-items-center border rounded p-2 bg-white"
                           >
                             <div>
-                              <div className="fw-semibold">
-                                {item.name}
-                              </div>
+                              <div className="fw-semibold">{item.name}</div>
                               <div className="small text-muted">
                                 Sections: {(item.sections || []).join(', ') || '-'}
                               </div>
