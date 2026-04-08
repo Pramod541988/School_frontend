@@ -8,7 +8,7 @@ import { saveSession } from '@/lib/auth';
 
 export default function LoginPage() {
   const router = useRouter();
-  const [form, setForm] = useState({ username: 'admin1', password: '123456' });
+  const [form, setForm] = useState({ username: '', password: '' });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -20,8 +20,15 @@ export default function LoginPage() {
     e.preventDefault();
     setLoading(true);
     setError('');
+
     try {
-      const res = await api.post('/auth/login', form);
+      const payload = {
+        role: 'admin',
+        username: form.username.trim(),
+        password: form.password
+      };
+
+      const res = await api.post('/auth/login', payload);
       saveSession(res.data);
       router.replace('/dashboard');
     } catch (err) {
@@ -46,7 +53,9 @@ export default function LoginPage() {
             <Card className="card-soft border-0">
               <Card.Body className="p-4 p-md-5">
                 <div className="text-center mb-4">
-                  <div style={{ fontSize: 34, fontWeight: 800, color: '#1d3557' }}>Smart School</div>
+                  <div style={{ fontSize: 34, fontWeight: 800, color: '#1d3557' }}>
+                    Smart School
+                  </div>
                   <div style={{ color: '#667085' }}>Admin Portal Login</div>
                 </div>
 
@@ -59,7 +68,8 @@ export default function LoginPage() {
                       name="username"
                       value={form.username}
                       onChange={onChange}
-                      placeholder="Enter username"
+                      placeholder="Enter admin username"
+                      autoComplete="username"
                     />
                   </Form.Group>
 
@@ -70,7 +80,8 @@ export default function LoginPage() {
                       name="password"
                       value={form.password}
                       onChange={onChange}
-                      placeholder="Enter password"
+                      placeholder="Enter admin password"
+                      autoComplete="current-password"
                     />
                   </Form.Group>
 
@@ -78,10 +89,6 @@ export default function LoginPage() {
                     {loading ? 'Signing in...' : 'Login'}
                   </Button>
                 </Form>
-
-                <div className="mt-4" style={{ fontSize: 14, color: '#667085' }}>
-                  Demo: <strong>admin1</strong> / <strong>123456</strong>
-                </div>
               </Card.Body>
             </Card>
           </Col>
