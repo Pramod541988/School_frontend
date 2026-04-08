@@ -17,9 +17,6 @@ export default function AdminLayout({ title, subtitle, children }) {
     router.replace('/login');
   };
 
-  const roleLabel =
-    session?.role ? `${session.role.charAt(0).toUpperCase()}${session.role.slice(1)}` : 'User';
-
   return (
     <RequireAuth>
       <div className="page-shell">
@@ -38,7 +35,7 @@ export default function AdminLayout({ title, subtitle, children }) {
               >
                 <div className="mb-4">
                   <div style={{ fontSize: 22, fontWeight: 700 }}>Smart School</div>
-                  <div style={{ fontSize: 13, color: '#dbe6ff' }}>{roleLabel} Portal</div>
+                  <div style={{ fontSize: 13, color: '#dbe6ff' }}>Admin Portal</div>
                 </div>
 
                 {menu.map((item) => (
@@ -60,19 +57,15 @@ export default function AdminLayout({ title, subtitle, children }) {
                     <div style={{ fontSize: 28, fontWeight: 700 }}>{title}</div>
                     <div style={{ color: '#667085' }}>{subtitle}</div>
                   </div>
-
                   <div className="d-flex align-items-center gap-3">
                     <div className="text-end">
-                      <div style={{ fontWeight: 600 }}>{session?.name || 'User'}</div>
+                      <div style={{ fontWeight: 600 }}>{session?.name || 'Admin'}</div>
                       <div style={{ fontSize: 13, color: '#667085' }}>{session?.role || 'role'}</div>
                     </div>
-                    <Button variant="outline-danger" onClick={handleLogout}>
-                      Logout
-                    </Button>
+                    <Button variant="outline-danger" onClick={handleLogout}>Logout</Button>
                   </div>
                 </Card.Body>
               </Card>
-
               {children}
             </Col>
           </Row>
