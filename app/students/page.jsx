@@ -23,8 +23,10 @@ const emptyForm = {
   rollNo: '',
   guardianName: '',
   phone: '',
+  gender: '',
+  dateOfBirth: '',
+  dateOfAdmission: '',
   status: 'Active',
-  attendancePercentage: '',
   feeTotal: '',
   feePaid: '',
 };
@@ -68,6 +70,17 @@ function statusVariant(status) {
   if (status === 'Active') return 'success';
   if (status === 'Inactive') return 'secondary';
   return 'warning';
+}
+
+function formatDate(value) {
+  if (!value) return '-';
+  try {
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return value;
+    return d.toLocaleDateString('en-IN');
+  } catch {
+    return value;
+  }
 }
 
 export default function StudentsPage() {
@@ -115,9 +128,11 @@ export default function StudentsPage() {
           student.roll_no,
           student.guardian_name,
           student.phone,
+          student.gender,
           student.status,
+          student.date_of_birth,
+          student.date_of_admission,
           getFeeStatus(student),
-          String(student.attendance_percentage ?? ''),
         ]
           .join(' ')
           .toLowerCase()
@@ -244,12 +259,10 @@ export default function StudentsPage() {
       rollNo: student.roll_no || '',
       guardianName: student.guardian_name || '',
       phone: student.phone || '',
+      gender: student.gender || '',
+      dateOfBirth: student.date_of_birth || '',
+      dateOfAdmission: student.date_of_admission || '',
       status: student.status || 'Active',
-      attendancePercentage:
-        student.attendance_percentage !== undefined &&
-        student.attendance_percentage !== null
-          ? String(student.attendance_percentage)
-          : '',
       feeTotal:
         student.fee_total !== undefined && student.fee_total !== null
           ? String(student.fee_total)
@@ -298,6 +311,7 @@ export default function StudentsPage() {
     if (!form.classId.trim()) nextErrors.classId = 'Class is required';
     if (!form.section.trim()) nextErrors.section = 'Section is required';
     if (!form.rollNo.trim()) nextErrors.rollNo = 'Roll number is required';
+
     if (!form.guardianName.trim()) {
       nextErrors.guardianName = 'Guardian name is required';
     }
@@ -308,14 +322,24 @@ export default function StudentsPage() {
       nextErrors.phone = 'Phone number must be 10 digits';
     }
 
-    if (form.attendancePercentage === '') {
-      nextErrors.attendancePercentage = 'Attendance percentage is required';
-    } else {
-      const val = Number(form.attendancePercentage);
-      if (Number.isNaN(val) || val < 0 || val > 100) {
-        nextErrors.attendancePercentage =
-          'Attendance percentage must be between 0 and 100';
-      }
+    if (!form.gender.trim()) {
+      nextErrors.gender = 'Gender is required';
+    }
+
+    if (!form.dateOfBirth) {
+      nextErrors.dateOfBirth = 'Date of birth is required';
+    }
+
+    if (!form.dateOfAdmission) {
+      nextErrors.dateOfAdmission = 'Date of admission is required';
+    }
+
+    if (
+      form.dateOfBirth &&
+      form.dateOfAdmission &&
+      new Date(form.dateOfBirth) > new Date(form.dateOfAdmission)
+    ) {
+      nextErrors.dateOfAdmission = 'Admission date must be after date of birth';
     }
 
     if (form.feeTotal !== '' && Number(form.feeTotal) < 0) {
@@ -349,8 +373,10 @@ export default function StudentsPage() {
       roll_no: form.rollNo.trim(),
       guardian_name: form.guardianName.trim(),
       phone: form.phone.trim(),
+      gender: form.gender.trim(),
+      date_of_birth: form.dateOfBirth,
+      date_of_admission: form.dateOfAdmission,
       status: form.status,
-      attendance_percentage: Number(form.attendancePercentage),
       fee_total: Number(form.feeTotal || 0),
       fee_paid: Number(form.feePaid || 0),
     };
@@ -412,7 +438,7 @@ export default function StudentsPage() {
   return (
     <AdminLayout
       title="Students"
-      subtitle="Manage student profiles, admissions, roll numbers, and class mapping."
+      subtitle="Manage student admissions, profile details, roll numbers, and class mapping."
     >
       {pageError ? (
         <Alert variant="danger" className="mb-4">
@@ -513,9 +539,11 @@ export default function StudentsPage() {
                   <th>Class</th>
                   <th>Section</th>
                   <th>Roll No</th>
+                  <th>Gender</th>
+                  <th>DOB</th>
+                  <th>Admission Date</th>
                   <th>Guardian</th>
                   <th>Phone</th>
-                  <th>Attendance %</th>
                   <th>Fee Status</th>
                   <th>Status</th>
                   <th style={{ width: 180 }}>Actions</th>
@@ -524,7 +552,7 @@ export default function StudentsPage() {
               <tbody>
                 {filteredStudents.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="text-center py-4">
+                    <td colSpan={12} className="text-center py-4">
                       No students found
                     </td>
                   </tr>
@@ -538,9 +566,11 @@ export default function StudentsPage() {
                         <td>{student.class_name}</td>
                         <td>{student.section || '-'}</td>
                         <td>{student.roll_no}</td>
+                        <td>{student.gender || '-'}</td>
+                        <td>{formatDate(student.date_of_birth)}</td>
+                        <td>{formatDate(student.date_of_admission)}</td>
                         <td>{student.guardian_name}</td>
                         <td>{student.phone}</td>
-                        <td>{student.attendance_percentage ?? 0}%</td>
                         <td>
                           <Badge bg={feeVariant(currentFeeStatus)}>
                             {currentFeeStatus}
@@ -579,7 +609,7 @@ export default function StudentsPage() {
         </Card.Body>
       </Card>
 
-      <Modal show={showModal} onHide={closeModal} centered>
+      <Modal show={showModal} onHide={closeModal} centered size="lg">
         <Form onSubmit={onSubmit}>
           <Modal.Header closeButton>
             <Modal.Title>
@@ -668,19 +698,52 @@ export default function StudentsPage() {
 
               <Col md={6}>
                 <Form.Group>
-                  <Form.Label>Attendance Percentage</Form.Label>
-                  <Form.Control
-                    name="attendancePercentage"
-                    type="number"
-                    min="0"
-                    max="100"
-                    value={form.attendancePercentage}
+                  <Form.Label>Gender</Form.Label>
+                  <Form.Select
+                    name="gender"
+                    value={form.gender}
                     onChange={onChange}
-                    isInvalid={!!errors.attendancePercentage}
-                    placeholder="Enter attendance %"
+                    isInvalid={!!errors.gender}
+                  >
+                    <option value="">Select gender</option>
+                    <option value="Male">Male</option>
+                    <option value="Female">Female</option>
+                    <option value="Other">Other</option>
+                  </Form.Select>
+                  <Form.Control.Feedback type="invalid">
+                    {errors.gender}
+                  </Form.Control.Feedback>
+                </Form.Group>
+              </Col>
+
+              <Col md={6}>
+                <Form.Group>
+                  <Form.Label>Date of Birth</Form.Label>
+                  <Form.Control
+                    name="dateOfBirth"
+                    type="date"
+                    value={form.dateOfBirth}
+                    onChange={onChange}
+                    isInvalid={!!errors.dateOfBirth}
                   />
                   <Form.Control.Feedback type="invalid">
-                    {errors.attendancePercentage}
+                    {errors.dateOfBirth}
+                  </Form.Control.Feedback>
+                </Form.Group>
+              </Col>
+
+              <Col md={6}>
+                <Form.Group>
+                  <Form.Label>Date of Admission</Form.Label>
+                  <Form.Control
+                    name="dateOfAdmission"
+                    type="date"
+                    value={form.dateOfAdmission}
+                    onChange={onChange}
+                    isInvalid={!!errors.dateOfAdmission}
+                  />
+                  <Form.Control.Feedback type="invalid">
+                    {errors.dateOfAdmission}
                   </Form.Control.Feedback>
                 </Form.Group>
               </Col>
