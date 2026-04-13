@@ -71,8 +71,6 @@ export default function TimetablePage() {
   const [classes, setClasses] = useState([]);
   const [teachers, setTeachers] = useState([]);
   const [entries, setEntries] = useState([]);
-  const [subjects, setSubjects] = useState([]);
-  const [rooms, setRooms] = useState([]);
 
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -97,36 +95,6 @@ export default function TimetablePage() {
     } catch {
       return { detail: text || 'Unexpected server response' };
     }
-  }
-
-  async function tryFetchList(endpoints) {
-    let lastError = 'Failed to load data';
-
-    for (const url of endpoints) {
-      try {
-        const res = await fetch(url, {
-          method: 'GET',
-          headers: authHeaders(),
-          cache: 'no-store',
-        });
-
-        const data = await readJsonSafe(res);
-        if (!res.ok) {
-          lastError = data?.detail || lastError;
-          continue;
-        }
-
-        return Array.isArray(data?.items)
-          ? data.items
-          : Array.isArray(data)
-            ? data
-            : [];
-      } catch (err) {
-        lastError = err?.message || lastError;
-      }
-    }
-
-    throw new Error(lastError);
   }
 
   async function loadClasses() {
@@ -154,22 +122,6 @@ export default function TimetablePage() {
     const data = await readJsonSafe(res);
     if (!res.ok) throw new Error(data?.detail || 'Failed to load teachers');
     setTeachers(Array.isArray(data?.items) ? data.items : []);
-  }
-
-  async function loadSubjects() {
-    const items = await tryFetchList([
-      `${API_BASE}/admin/settings/subjects`,
-      `${API_BASE}/admin/subjects`,
-    ]);
-    setSubjects(items.filter((x) => (x.status || 'Active') !== 'Inactive'));
-  }
-
-  async function loadRooms() {
-    const items = await tryFetchList([
-      `${API_BASE}/admin/settings/rooms`,
-      `${API_BASE}/admin/rooms`,
-    ]);
-    setRooms(items.filter((x) => (x.status || 'Active') !== 'Inactive'));
   }
 
   async function loadEntries({
@@ -204,7 +156,7 @@ export default function TimetablePage() {
     try {
       setLoading(true);
       setPageError('');
-      await Promise.all([loadClasses(), loadTeachers(), loadSubjects(), loadRooms()]);
+      await Promise.all([loadClasses(), loadTeachers()]);
     } catch (err) {
       setPageError(err?.message || 'Failed to load timetable data');
     } finally {
@@ -299,7 +251,6 @@ export default function TimetablePage() {
     if (!form.day_name) nextErrors.day_name = 'Day is required';
     if (!String(form.period_no).trim()) nextErrors.period_no = 'Period number is required';
     if (!form.subject.trim()) nextErrors.subject = 'Subject is required';
-    if (!form.room.trim()) nextErrors.room = 'Room is required';
     setErrors(nextErrors);
     return Object.keys(nextErrors).length === 0;
   }
@@ -670,18 +621,12 @@ export default function TimetablePage() {
 
             <Col md={4}>
               <Form.Label>Subject</Form.Label>
-              <Form.Select
+              <Form.Control
                 value={form.subject}
                 onChange={(e) => setForm((prev) => ({ ...prev, subject: e.target.value }))}
                 isInvalid={!!errors.subject}
-              >
-                <option value="">Select subject</option>
-                {subjects.map((item) => (
-                  <option key={item.id} value={item.name}>
-                    {item.name}
-                  </option>
-                ))}
-              </Form.Select>
+                placeholder="Mathematics"
+              />
               <Form.Control.Feedback type="invalid">{errors.subject}</Form.Control.Feedback>
             </Col>
 
@@ -702,19 +647,11 @@ export default function TimetablePage() {
 
             <Col md={4}>
               <Form.Label>Room</Form.Label>
-              <Form.Select
+              <Form.Control
                 value={form.room}
                 onChange={(e) => setForm((prev) => ({ ...prev, room: e.target.value }))}
-                isInvalid={!!errors.room}
-              >
-                <option value="">Select room</option>
-                {rooms.map((item) => (
-                  <option key={item.id} value={item.room_no}>
-                    {item.room_name ? `${item.room_no} - ${item.room_name}` : item.room_no}
-                  </option>
-                ))}
-              </Form.Select>
-              <Form.Control.Feedback type="invalid">{errors.room}</Form.Control.Feedback>
+                placeholder="Room 101"
+              />
             </Col>
 
             <Col md={6}>
