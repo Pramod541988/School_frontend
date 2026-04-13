@@ -78,7 +78,8 @@ export default function TimetablePage() {
   const [filterSections, setFilterSections] = useState([]);
   const [modalSections, setModalSections] = useState([]);
 
-  const [loading, setLoading] = useState(false);
+  const [loadingBase, setLoadingBase] = useState(false);
+  const [loadingEntries, setLoadingEntries] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const [pageError, setPageError] = useState('');
@@ -104,28 +105,32 @@ export default function TimetablePage() {
     }
   }
 
+  async function fetchList(url, customError = 'Failed to load data') {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: authHeaders(),
+      cache: 'no-store',
+    });
+
+    const data = await readJsonSafe(res);
+    if (!res.ok) {
+      throw new Error(data?.detail || customError);
+    }
+
+    return Array.isArray(data?.items)
+      ? data.items
+      : Array.isArray(data)
+        ? data
+        : [];
+  }
+
   async function tryFetchList(endpoints) {
     let lastError = 'Failed to load data';
 
     for (const url of endpoints) {
       try {
-        const res = await fetch(url, {
-          method: 'GET',
-          headers: authHeaders(),
-          cache: 'no-store',
-        });
-
-        const data = await readJsonSafe(res);
-        if (!res.ok) {
-          lastError = data?.detail || lastError;
-          continue;
-        }
-
-        return Array.isArray(data?.items)
-          ? data.items
-          : Array.isArray(data)
-            ? data
-            : [];
+        const items = await fetchList(url);
+        return items;
       } catch (err) {
         lastError = err?.message || lastError;
       }
@@ -135,20 +140,10 @@ export default function TimetablePage() {
   }
 
   async function loadClasses() {
-    const res = await fetch(`${API_BASE}/admin/classes`, {
-      method: 'GET',
-      headers: authHeaders(),
-      cache: 'no-store',
-    });
-    const data = await readJsonSafe(res);
-    if (!res.ok) throw new Error(data?.detail || 'Failed to load classes');
-
-    const rows = Array.isArray(data?.items)
-      ? data.items
-      : Array.isArray(data)
-        ? data
-        : [];
-
+    const rows = await tryFetchList([
+      `${API_BASE}/admin/classes`,
+      `${API_BASE}/classes`,
+    ]);
     setClasses(rows);
 
     if (!classFilter && rows.length > 0) {
@@ -157,20 +152,19 @@ export default function TimetablePage() {
   }
 
   async function loadTeachers() {
-    const res = await fetch(`${API_BASE}/admin/teachers`, {
-      method: 'GET',
-      headers: authHeaders(),
-      cache: 'no-store',
-    });
-    const data = await readJsonSafe(res);
-    if (!res.ok) throw new Error(data?.detail || 'Failed to load teachers');
-    setTeachers(Array.isArray(data?.items) ? data.items : Array.isArray(data) ? data : []);
+    const rows = await tryFetchList([
+      `${API_BASE}/admin/teachers`,
+      `${API_BASE}/teachers`,
+    ]);
+    setTeachers(rows);
   }
 
   async function loadSubjects() {
     const items = await tryFetchList([
       `${API_BASE}/admin/settings/subjects`,
       `${API_BASE}/admin/subjects`,
+      `${API_BASE}/settings/subjects`,
+      `${API_BASE}/subjects`,
     ]);
     setSubjects(items.filter((x) => (x.status || 'Active') !== 'Inactive'));
   }
@@ -179,48 +173,60 @@ export default function TimetablePage() {
     const items = await tryFetchList([
       `${API_BASE}/admin/settings/rooms`,
       `${API_BASE}/admin/rooms`,
+      `${API_BASE}/settings/rooms`,
+      `${API_BASE}/rooms`,
     ]);
     setRooms(items.filter((x) => (x.status || 'Active') !== 'Inactive'));
   }
 
-  async function loadSectionsForClass(classId, mode = 'filter') {
+  async function loadSectionsForFilter(classId) {
     if (!classId) {
-      if (mode === 'filter') {
-        setFilterSections([]);
-        setSectionFilter('');
-      } else {
-        setModalSections([]);
-        setForm((prev) => ({ ...prev, section_id: '' }));
-      }
-      return [];
+      setFilterSections([]);
+      setSectionFilter('');
+      return;
     }
 
     const items = await tryFetchList([
       `${API_BASE}/admin/sections?class_id=${classId}`,
       `${API_BASE}/admin/class-sections?class_id=${classId}`,
       `${API_BASE}/admin/settings/sections?class_id=${classId}`,
+      `${API_BASE}/sections?class_id=${classId}`,
     ]);
 
-    if (mode === 'filter') {
-      setFilterSections(items);
-      setSectionFilter((prev) => {
-        if (prev && items.some((x) => String(x.id) === String(prev))) {
-          return prev;
-        }
-        return items.length ? String(items[0].id) : '';
-      });
-    } else {
-      setModalSections(items);
-      setForm((prev) => {
-        const existingValid = prev.section_id && items.some((x) => String(x.id) === String(prev.section_id));
-        return {
-          ...prev,
-          section_id: existingValid ? prev.section_id : items.length ? String(items[0].id) : '',
-        };
-      });
+    setFilterSections(items);
+
+    setSectionFilter((prev) => {
+      if (prev && items.some((x) => String(x.id) === String(prev))) return prev;
+      return items.length ? String(items[0].id) : '';
+    });
+  }
+
+  async function loadSectionsForModal(classId, selectedSectionId = '') {
+    if (!classId) {
+      setModalSections([]);
+      setForm((prev) => ({ ...prev, section_id: '' }));
+      return;
     }
 
-    return items;
+    const items = await tryFetchList([
+      `${API_BASE}/admin/sections?class_id=${classId}`,
+      `${API_BASE}/admin/class-sections?class_id=${classId}`,
+      `${API_BASE}/admin/settings/sections?class_id=${classId}`,
+      `${API_BASE}/sections?class_id=${classId}`,
+    ]);
+
+    setModalSections(items);
+
+    const validSelected = selectedSectionId && items.some((x) => String(x.id) === String(selectedSectionId));
+
+    setForm((prev) => ({
+      ...prev,
+      section_id: validSelected
+        ? String(selectedSectionId)
+        : items.length
+          ? String(items[0].id)
+          : '',
+    }));
   }
 
   async function loadEntries({
@@ -230,6 +236,11 @@ export default function TimetablePage() {
     selectedDay = dayFilter,
     selectedQuery = query,
   } = {}) {
+    if (!selectedClass) {
+      setEntries([]);
+      return;
+    }
+
     const params = new URLSearchParams();
     if (selectedClass) params.set('class_id', selectedClass);
     if (selectedSection) params.set('section_id', selectedSection);
@@ -238,14 +249,13 @@ export default function TimetablePage() {
     if (selectedQuery?.trim()) params.set('search', selectedQuery.trim());
 
     const qs = params.toString();
-    const res = await fetch(`${API_BASE}/admin/timetables${qs ? `?${qs}` : ''}`, {
-      method: 'GET',
-      headers: authHeaders(),
-      cache: 'no-store',
-    });
-    const data = await readJsonSafe(res);
-    if (!res.ok) throw new Error(data?.detail || 'Failed to load timetable entries');
-    setEntries(Array.isArray(data?.items) ? data.items : Array.isArray(data) ? data : []);
+
+    const rows = await tryFetchList([
+      `${API_BASE}/admin/timetables${qs ? `?${qs}` : ''}`,
+      `${API_BASE}/timetables${qs ? `?${qs}` : ''}`,
+    ]);
+
+    setEntries(rows);
   }
 
   async function refreshBaseData() {
@@ -255,13 +265,26 @@ export default function TimetablePage() {
     }
 
     try {
-      setLoading(true);
+      setLoadingBase(true);
       setPageError('');
-      await Promise.all([loadClasses(), loadTeachers(), loadSubjects(), loadRooms()]);
-    } catch (err) {
-      setPageError(err?.message || 'Failed to load timetable data');
+
+      const results = await Promise.allSettled([
+        loadClasses(),
+        loadTeachers(),
+        loadSubjects(),
+        loadRooms(),
+      ]);
+
+      const failed = results
+        .filter((x) => x.status === 'rejected')
+        .map((x) => x.reason?.message)
+        .filter(Boolean);
+
+      if (failed.length) {
+        setPageError(failed[0]);
+      }
     } finally {
-      setLoading(false);
+      setLoadingBase(false);
     }
   }
 
@@ -273,22 +296,27 @@ export default function TimetablePage() {
   useEffect(() => {
     if (!API_BASE || !classFilter) return;
 
-    loadSectionsForClass(classFilter, 'filter').catch((err) => {
+    loadSectionsForFilter(classFilter).catch((err) => {
+      setFilterSections([]);
+      setSectionFilter('');
       setPageError(err?.message || 'Failed to load sections');
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [API_BASE, classFilter]);
 
   useEffect(() => {
-    if (!API_BASE || !classFilter || !sectionFilter) return;
+    if (!API_BASE || !classFilter) return;
 
     const t = setTimeout(() => {
-      setLoading(true);
-      loadEntries().catch((err) => {
-        setPageError(err?.message || 'Failed to load timetable entries');
-      }).finally(() => {
-        setLoading(false);
-      });
+      setLoadingEntries(true);
+      loadEntries()
+        .catch((err) => {
+          setEntries([]);
+          setPageError(err?.message || 'Failed to load timetable entries');
+        })
+        .finally(() => {
+          setLoadingEntries(false);
+        });
     }, 250);
 
     return () => clearTimeout(t);
@@ -328,29 +356,30 @@ export default function TimetablePage() {
       day_name: dayFilter || 'Monday',
     });
     setErrors({});
+    setModalSections([]);
+  }
+
+  async function openAddModal() {
+    resetForm();
+    setShowModal(true);
 
     if (classFilter) {
-      loadSectionsForClass(classFilter, 'modal').catch((err) => {
+      try {
+        await loadSectionsForModal(classFilter, sectionFilter || '');
+      } catch (err) {
         setPageError(err?.message || 'Failed to load sections');
-      });
-    } else {
-      setModalSections([]);
+      }
     }
   }
 
-  function openAddModal() {
-    resetForm();
-    setShowModal(true);
-  }
-
   async function openEditModal(item) {
-    const nextClassId = item.class_id ? String(item.class_id) : '';
-    const nextSectionId = item.section_id ? String(item.section_id) : '';
+    const classId = item.class_id ? String(item.class_id) : '';
+    const sectionId = item.section_id ? String(item.section_id) : '';
 
     setEditingId(item.id);
     setForm({
-      class_id: nextClassId,
-      section_id: nextSectionId,
+      class_id: classId,
+      section_id: sectionId,
       teacher_id: item.teacher_id ? String(item.teacher_id) : '',
       timetable_type: item.timetable_type || 'Regular',
       day_name: item.day_name || 'Monday',
@@ -366,28 +395,21 @@ export default function TimetablePage() {
     setErrors({});
     setShowModal(true);
 
-    if (nextClassId) {
+    if (classId) {
       try {
-        const items = await tryFetchList([
-          `${API_BASE}/admin/sections?class_id=${nextClassId}`,
-          `${API_BASE}/admin/class-sections?class_id=${nextClassId}`,
-          `${API_BASE}/admin/settings/sections?class_id=${nextClassId}`,
-        ]);
-        setModalSections(items);
+        await loadSectionsForModal(classId, sectionId);
       } catch (err) {
         setPageError(err?.message || 'Failed to load sections');
       }
-    } else {
-      setModalSections([]);
     }
   }
 
   function closeModal() {
     setShowModal(false);
-    setModalSections([]);
     setEditingId(null);
     setForm(emptyForm);
     setErrors({});
+    setModalSections([]);
   }
 
   function validateForm() {
@@ -399,6 +421,7 @@ export default function TimetablePage() {
     if (!String(form.period_no).trim()) nextErrors.period_no = 'Period number is required';
     if (!form.subject.trim()) nextErrors.subject = 'Subject is required';
     if (!form.room.trim()) nextErrors.room = 'Room is required';
+
     setErrors(nextErrors);
     return Object.keys(nextErrors).length === 0;
   }
@@ -505,6 +528,7 @@ export default function TimetablePage() {
             </Card.Body>
           </Card>
         </Col>
+
         <Col md={3}>
           <Card className="shadow-sm border-0">
             <Card.Body>
@@ -513,6 +537,7 @@ export default function TimetablePage() {
             </Card.Body>
           </Card>
         </Col>
+
         <Col md={3}>
           <Card className="shadow-sm border-0">
             <Card.Body>
@@ -521,6 +546,7 @@ export default function TimetablePage() {
             </Card.Body>
           </Card>
         </Col>
+
         <Col md={3}>
           <Card className="shadow-sm border-0">
             <Card.Body>
@@ -536,7 +562,13 @@ export default function TimetablePage() {
           <Row className="g-3 align-items-end">
             <Col md={3}>
               <Form.Label>Class</Form.Label>
-              <Form.Select value={classFilter} onChange={(e) => setClassFilter(e.target.value)}>
+              <Form.Select
+                value={classFilter}
+                onChange={(e) => {
+                  setClassFilter(e.target.value);
+                  setSectionFilter('');
+                }}
+              >
                 <option value="">Select class</option>
                 {classes.map((item) => (
                   <option key={item.id} value={item.id}>
@@ -618,7 +650,7 @@ export default function TimetablePage() {
                 {dayFilter} • {typeFilter} timetable
               </div>
             </div>
-            {loading ? <Spinner animation="border" size="sm" /> : null}
+            {(loadingBase || loadingEntries) ? <Spinner animation="border" size="sm" /> : null}
           </div>
 
           <Table responsive bordered hover className="align-middle">
@@ -649,7 +681,7 @@ export default function TimetablePage() {
                         <Badge bg={typeVariant(item.timetable_type)}>{item.timetable_type}</Badge>
                       </div>
                     </td>
-                    <td>{item.section_name || '-'}</td>
+                    <td>{item.section_name || selectedSectionName || '-'}</td>
                     <td>{item.teacher_name || '-'}</td>
                     <td>
                       {item.start_time || item.end_time
@@ -676,9 +708,9 @@ export default function TimetablePage() {
               ) : (
                 <tr>
                   <td colSpan={9} className="text-center text-muted py-4">
-                    No entries for {selectedClassName}
-                    {selectedSectionName && selectedSectionName !== '-' ? ` - ${selectedSectionName}` : ''}
-                    {' '}on {dayFilter} under {typeFilter} timetable
+                    {classFilter
+                      ? `No entries for ${selectedClassName}${selectedSectionName && selectedSectionName !== '-' ? ` - ${selectedSectionName}` : ''} on ${dayFilter} under ${typeFilter} timetable`
+                      : 'Select a class to view timetable'}
                   </td>
                 </tr>
               )}
@@ -704,6 +736,7 @@ export default function TimetablePage() {
         <Modal.Header closeButton>
           <Modal.Title>{editingId ? 'Edit Timetable Entry' : 'Add Timetable Entry'}</Modal.Title>
         </Modal.Header>
+
         <Modal.Body>
           <Row className="g-3">
             <Col md={4}>
@@ -719,8 +752,10 @@ export default function TimetablePage() {
                   }));
                   setModalSections([]);
 
+                  if (!nextClassId) return;
+
                   try {
-                    await loadSectionsForClass(nextClassId, 'modal');
+                    await loadSectionsForModal(nextClassId);
                   } catch (err) {
                     setPageError(err?.message || 'Failed to load sections');
                   }
@@ -742,8 +777,8 @@ export default function TimetablePage() {
               <Form.Select
                 value={form.section_id}
                 onChange={(e) => setForm((prev) => ({ ...prev, section_id: e.target.value }))}
-                isInvalid={!!errors.section_id}
                 disabled={!form.class_id}
+                isInvalid={!!errors.section_id}
               >
                 <option value="">Select section</option>
                 {modalSections.map((item) => (
@@ -769,21 +804,7 @@ export default function TimetablePage() {
               </Form.Select>
             </Col>
 
-            <Col md={4}>
-              <Form.Label>Day</Form.Label>
-              <Form.Select
-                value={form.day_name}
-                onChange={(e) => setForm((prev) => ({ ...prev, day_name: e.target.value }))}
-              >
-                {DAY_OPTIONS.map((item) => (
-                  <option key={item} value={item}>
-                    {item}
-                  </option>
-                ))}
-              </Form.Select>
-            </Col>
-
-            <Col md={4}>
+            <Col md={3}>
               <Form.Label>Period No</Form.Label>
               <Form.Control
                 type="number"
@@ -796,7 +817,7 @@ export default function TimetablePage() {
               <Form.Control.Feedback type="invalid">{errors.period_no}</Form.Control.Feedback>
             </Col>
 
-            <Col md={4}>
+            <Col md={3}>
               <Form.Label>Period Label</Form.Label>
               <Form.Control
                 value={form.period_label}
@@ -805,7 +826,7 @@ export default function TimetablePage() {
               />
             </Col>
 
-            <Col md={4}>
+            <Col md={3}>
               <Form.Label>Start Time</Form.Label>
               <Form.Control
                 type="time"
@@ -814,13 +835,27 @@ export default function TimetablePage() {
               />
             </Col>
 
-            <Col md={4}>
+            <Col md={3}>
               <Form.Label>End Time</Form.Label>
               <Form.Control
                 type="time"
                 value={form.end_time}
                 onChange={(e) => setForm((prev) => ({ ...prev, end_time: e.target.value }))}
               />
+            </Col>
+
+            <Col md={4}>
+              <Form.Label>Day</Form.Label>
+              <Form.Select
+                value={form.day_name}
+                onChange={(e) => setForm((prev) => ({ ...prev, day_name: e.target.value }))}
+              >
+                {DAY_OPTIONS.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </Form.Select>
             </Col>
 
             <Col md={4}>
@@ -855,7 +890,7 @@ export default function TimetablePage() {
               </Form.Select>
             </Col>
 
-            <Col md={4}>
+            <Col md={6}>
               <Form.Label>Room</Form.Label>
               <Form.Select
                 value={form.room}
@@ -873,15 +908,6 @@ export default function TimetablePage() {
             </Col>
 
             <Col md={6}>
-              <Form.Label>Remark</Form.Label>
-              <Form.Control
-                value={form.remark}
-                onChange={(e) => setForm((prev) => ({ ...prev, remark: e.target.value }))}
-                placeholder="Chapter test / final exam / practical"
-              />
-            </Col>
-
-            <Col md={6}>
               <Form.Label>Status</Form.Label>
               <Form.Select
                 value={form.status}
@@ -891,8 +917,18 @@ export default function TimetablePage() {
                 <option value="Inactive">Inactive</option>
               </Form.Select>
             </Col>
+
+            <Col md={12}>
+              <Form.Label>Remark</Form.Label>
+              <Form.Control
+                value={form.remark}
+                onChange={(e) => setForm((prev) => ({ ...prev, remark: e.target.value }))}
+                placeholder="Chapter test / final exam / practical"
+              />
+            </Col>
           </Row>
         </Modal.Body>
+
         <Modal.Footer>
           <Button variant="outline-secondary" onClick={closeModal}>
             Cancel
