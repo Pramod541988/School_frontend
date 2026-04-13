@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   Badge,
   Button,
   Card,
@@ -11,7 +12,6 @@ import {
   Modal,
   Row,
   Table,
-  Alert,
   Spinner
 } from 'react-bootstrap';
 import AdminLayout from '@/components/AdminLayout';
@@ -19,7 +19,7 @@ import AdminLayout from '@/components/AdminLayout';
 const emptyForm = {
   name: '',
   sectionsText: '',
-  classTeacher: '',
+  classTeacherId: '',
   status: 'Active',
 };
 
@@ -45,6 +45,7 @@ export default function ClassesPage() {
   const API_BASE = getApiBase();
 
   const [classes, setClasses] = useState([]);
+  const [teachers, setTeachers] = useState([]);
   const [query, setQuery] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -59,6 +60,24 @@ export default function ClassesPage() {
       return text ? JSON.parse(text) : {};
     } catch {
       return { detail: text || 'Unexpected server response' };
+    }
+  }
+
+  async function loadTeachers() {
+    if (!API_BASE) return;
+    try {
+      const res = await fetch(`${API_BASE}/admin/teachers`, {
+        method: 'GET',
+        headers: authHeaders(),
+        cache: 'no-store',
+      });
+      const data = await readJsonSafe(res);
+      if (!res.ok) throw new Error(data?.detail || 'Failed to load teachers');
+
+      const items = Array.isArray(data?.items) ? data.items : Array.isArray(data) ? data : [];
+      setTeachers(items);
+    } catch {
+      setTeachers([]);
     }
   }
 
@@ -89,8 +108,13 @@ export default function ClassesPage() {
     }
   }
 
+  async function refreshAll() {
+    await Promise.all([loadClasses(), loadTeachers()]);
+  }
+
   useEffect(() => {
-    loadClasses();
+    refreshAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const filteredClasses = useMemo(() => {
@@ -102,7 +126,7 @@ export default function ClassesPage() {
         item.name,
         ...(item.sections || []),
         item.class_teacher,
-        item.status,
+        String(item.student_count ?? item.no_of_students ?? ''),
       ]
         .join(' ')
         .toLowerCase()
@@ -121,7 +145,7 @@ export default function ClassesPage() {
     setForm({
       name: item.name || '',
       sectionsText: Array.isArray(item.sections) ? item.sections.join(', ') : '',
-      classTeacher: item.class_teacher || '',
+      classTeacherId: item.class_teacher_id ? String(item.class_teacher_id) : '',
       status: item.status || 'Active',
     });
     setShowModal(true);
@@ -143,9 +167,14 @@ export default function ClassesPage() {
           .split(',')
           .map((s) => s.trim())
           .filter(Boolean),
-        class_teacher: form.classTeacher.trim(),
         status: form.status,
       };
+
+      if (form.classTeacherId) {
+        payload.class_teacher_id = Number(form.classTeacherId);
+      } else {
+        payload.class_teacher_id = null;
+      }
 
       const url = editingId
         ? `${API_BASE}/admin/classes/${editingId}`
@@ -162,7 +191,7 @@ export default function ClassesPage() {
       const data = await readJsonSafe(res);
       if (!res.ok) throw new Error(data?.detail || 'Failed to save class');
 
-      await loadClasses();
+      await refreshAll();
       setShowModal(false);
     } catch (err) {
       alert(err?.message || 'Failed to save class');
@@ -187,14 +216,14 @@ export default function ClassesPage() {
       const data = await readJsonSafe(res);
       if (!res.ok) throw new Error(data?.detail || 'Failed to delete class');
 
-      await loadClasses();
+      await refreshAll();
     } catch (err) {
       alert(err?.message || 'Failed to delete class');
     }
   };
 
   return (
-    <AdminLayout title="Classes" subtitle="Create classes, sections, and class teachers.">
+    <AdminLayout title="Classes" subtitle="Create classes, sections, and optionally assign class teachers.">
       {error ? <Alert variant="danger">{error}</Alert> : null}
 
       <Card>
@@ -227,7 +256,7 @@ export default function ClassesPage() {
                   <th>Class</th>
                   <th>Sections</th>
                   <th>Teacher</th>
-                  <th>Status</th>
+                  <th>No. of Students</th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -240,13 +269,15 @@ export default function ClassesPage() {
                   filteredClasses.map((c) => (
                     <tr key={c.id}>
                       <td>{c.name}</td>
-                      <td>{(c.sections || []).join(', ')}</td>
-                      <td>{c.class_teacher}</td>
+                      <td>{(c.sections || []).join(', ') || '-'}</td>
                       <td>
-                        <Badge bg={c.status === 'Active' ? 'success' : 'secondary'}>
-                          {c.status}
-                        </Badge>
+                        {c.class_teacher ? (
+                          c.class_teacher
+                        ) : (
+                          <Badge bg="secondary">Not Assigned</Badge>
+                        )}
                       </td>
+                      <td>{c.student_count ?? c.no_of_students ?? 0}</td>
                       <td>
                         <Button size="sm" onClick={() => openEditModal(c)}>Edit</Button>{' '}
                         <Button size="sm" variant="danger" onClick={() => deleteClass(c.id)}>
@@ -288,10 +319,22 @@ export default function ClassesPage() {
 
             <Form.Group className="mb-3">
               <Form.Label>Class Teacher</Form.Label>
-              <Form.Control
-                value={form.classTeacher}
-                onChange={(e) => setForm((s) => ({ ...s, classTeacher: e.target.value }))}
-              />
+              <Form.Select
+                value={form.classTeacherId}
+                onChange={(e) => setForm((s) => ({ ...s, classTeacherId: e.target.value }))}
+              >
+                <option value="">Not Assigned</option>
+                {teachers
+                  .filter((t) => (t.status || '').toLowerCase() !== 'inactive')
+                  .map((teacher) => (
+                    <option key={teacher.id} value={teacher.id}>
+                      {teacher.teacher_name} {teacher.employee_id ? `(${teacher.employee_id})` : ''}
+                    </option>
+                  ))}
+              </Form.Select>
+              <div className="small text-muted mt-1">
+                Optional. You can create class first and assign teacher later from either Classes or Teachers page.
+              </div>
             </Form.Group>
 
             <Form.Group>
