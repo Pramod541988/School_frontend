@@ -16,15 +16,6 @@ import {
 } from 'react-bootstrap';
 import AdminLayout from '@/components/AdminLayout';
 
-const SUBJECT_OPTIONS = [
-  'Kannada',
-  'English',
-  'Hindi',
-  'Mathematics',
-  'Science',
-  'EVS',
-];
-
 const emptyForm = {
   teacherName: '',
   employeeId: '',
@@ -70,11 +61,35 @@ function parseSubjects(value) {
     .filter(Boolean);
 }
 
+function getTeacherAttendancePercent(teacher) {
+  const direct = teacher?.attendance_percentage;
+  if (direct !== undefined && direct !== null && direct !== '') {
+    const n = Number(direct);
+    if (!Number.isNaN(n)) return `${n}%`;
+  }
+
+  const percent = teacher?.attendance_percent;
+  if (percent !== undefined && percent !== null && percent !== '') {
+    const n = Number(percent);
+    if (!Number.isNaN(n)) return `${n}%`;
+  }
+
+  const presentDays = Number(teacher?.present_days ?? teacher?.attendance_present_days);
+  const workingDays = Number(teacher?.working_days ?? teacher?.attendance_working_days);
+
+  if (!Number.isNaN(presentDays) && !Number.isNaN(workingDays) && workingDays > 0) {
+    return `${Math.round((presentDays / workingDays) * 100)}%`;
+  }
+
+  return '-';
+}
+
 export default function TeachersPage() {
   const API_BASE = getApiBase();
 
   const [teachers, setTeachers] = useState([]);
   const [classes, setClasses] = useState([]);
+  const [subjectOptions, setSubjectOptions] = useState([]);
 
   const [query, setQuery] = useState('');
   const [classFilter, setClassFilter] = useState('');
@@ -108,6 +123,39 @@ export default function TeachersPage() {
     setClasses(Array.isArray(data) ? data : []);
   }
 
+  async function loadSubjects() {
+    try {
+      const endpoints = [
+        `${API_BASE}/admin/settings/subjects`,
+        `${API_BASE}/admin/subjects`,
+      ];
+
+      for (const url of endpoints) {
+        const res = await fetch(url, {
+          method: 'GET',
+          headers: authHeaders(),
+          cache: 'no-store',
+        });
+
+        const data = await readJsonSafe(res);
+        if (!res.ok) continue;
+
+        const items = Array.isArray(data?.items) ? data.items : Array.isArray(data) ? data : [];
+        const clean = items
+          .filter((x) => (x.status || 'Active') !== 'Inactive')
+          .map((x) => x.name)
+          .filter(Boolean);
+
+        setSubjectOptions(clean);
+        return;
+      }
+
+      setSubjectOptions([]);
+    } catch {
+      setSubjectOptions([]);
+    }
+  }
+
   async function loadTeachers() {
     const params = new URLSearchParams();
     if (query.trim()) params.set('search', query.trim());
@@ -134,7 +182,7 @@ export default function TeachersPage() {
     try {
       setLoading(true);
       setPageError('');
-      await Promise.all([loadClasses(), loadTeachers()]);
+      await Promise.all([loadClasses(), loadTeachers(), loadSubjects()]);
     } catch (err) {
       setPageError(err?.message || 'Failed to load data');
     } finally {
@@ -161,7 +209,8 @@ export default function TeachersPage() {
   const stats = useMemo(() => {
     const active = teachers.filter((x) => x.status === 'Active').length;
     const inactive = teachers.filter((x) => x.status === 'Inactive').length;
-    const linkedClasses = teachers.reduce((sum, item) => sum + (item.class_count || 0), 0);
+    const linkedClasses = teachers.reduce((sum, item) => sum + (item.class_count || (item.classes || []).length || 0), 0);
+
     return {
       total: teachers.length,
       active,
@@ -235,6 +284,7 @@ export default function TeachersPage() {
       ],
       selectedClassId: '',
     }));
+    setErrors((prev) => ({ ...prev, linkedClasses: '' }));
   };
 
   const removeLinkedClass = (classId) => {
@@ -282,10 +332,6 @@ export default function TeachersPage() {
       nextErrors.subjects = 'Please select at least one subject';
     }
 
-    if (form.linkedClasses.length === 0) {
-      nextErrors.linkedClasses = 'Please link at least one class';
-    }
-
     setErrors(nextErrors);
     return Object.keys(nextErrors).length === 0;
   };
@@ -327,7 +373,7 @@ export default function TeachersPage() {
       const data = await readJsonSafe(res);
       if (!res.ok) throw new Error(data?.detail || 'Failed to save teacher');
 
-      await Promise.all([loadTeachers(), loadClasses()]);
+      await Promise.all([loadTeachers(), loadClasses(), loadSubjects()]);
       closeModal();
     } catch (err) {
       setPageError(err?.message || 'Failed to save teacher');
@@ -350,7 +396,7 @@ export default function TeachersPage() {
       const data = await readJsonSafe(res);
       if (!res.ok) throw new Error(data?.detail || 'Failed to delete teacher');
 
-      await Promise.all([loadTeachers(), loadClasses()]);
+      await Promise.all([loadTeachers(), loadClasses(), loadSubjects()]);
     } catch (err) {
       setPageError(err?.message || 'Failed to delete teacher');
     }
@@ -359,7 +405,7 @@ export default function TeachersPage() {
   return (
     <AdminLayout
       title="Teachers"
-      subtitle="Manage teacher master and link classes cleanly."
+      subtitle="Manage teachers, subjects, class links, and attendance."
     >
       {pageError ? (
         <Alert variant="danger" className="mb-4">
@@ -459,6 +505,7 @@ export default function TeachersPage() {
                   <th>Phone</th>
                   <th>Subjects</th>
                   <th>Linked Classes</th>
+                  <th>Attendance %</th>
                   <th>Status</th>
                   <th style={{ width: 180 }}>Actions</th>
                 </tr>
@@ -466,7 +513,7 @@ export default function TeachersPage() {
               <tbody>
                 {teachers.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="text-center py-4">
+                    <td colSpan={8} className="text-center py-4">
                       No teachers found
                     </td>
                   </tr>
@@ -490,14 +537,19 @@ export default function TeachersPage() {
                         )}
                       </td>
                       <td>
-                        <div className="d-flex flex-wrap gap-1">
-                          {(teacher.classes || []).map((c) => (
-                            <Badge key={c.id} bg={c.is_primary ? 'primary' : 'secondary'}>
-                              {c.name}
-                            </Badge>
-                          ))}
-                        </div>
+                        {(teacher.classes || []).length > 0 ? (
+                          <div className="d-flex flex-wrap gap-1">
+                            {(teacher.classes || []).map((c) => (
+                              <Badge key={c.id} bg={c.is_primary ? 'primary' : 'secondary'}>
+                                {c.name}
+                              </Badge>
+                            ))}
+                          </div>
+                        ) : (
+                          <Badge bg="secondary">Not Assigned</Badge>
+                        )}
                       </td>
+                      <td>{getTeacherAttendancePercent(teacher)}</td>
                       <td>
                         <Badge bg={statusVariant(teacher.status)}>
                           {teacher.status}
@@ -622,7 +674,7 @@ export default function TeachersPage() {
                     isInvalid={!!errors.subjects}
                     style={{ minHeight: 140 }}
                   >
-                    {SUBJECT_OPTIONS.map((subject) => (
+                    {subjectOptions.map((subject) => (
                       <option key={subject} value={subject}>
                         {subject}
                       </option>
@@ -632,7 +684,7 @@ export default function TeachersPage() {
                     {errors.subjects}
                   </Form.Control.Feedback>
                   <div className="small text-muted mt-1">
-                    Hold Ctrl (Windows) or Cmd (Mac) to select multiple subjects
+                    Subjects are loaded from Settings. Hold Ctrl (Windows) or Cmd (Mac) to select multiple subjects.
                   </div>
 
                   {form.subjects.length > 0 ? (
@@ -677,7 +729,7 @@ export default function TeachersPage() {
                     <option value="">Select class</option>
                     {classes.map((item) => (
                       <option key={item.id} value={item.id}>
-                        {item.name} ({(item.sections || []).join(', ')})
+                        {item.name} ({(item.sections || []).join(', ') || '-'})
                       </option>
                     ))}
                   </Form.Select>
@@ -703,9 +755,9 @@ export default function TeachersPage() {
                   onChange={onChange}
                   label="Set linked primary class teacher based on selected class mapping"
                 />
-                {errors.linkedClasses ? (
-                  <div className="text-danger small mt-2">{errors.linkedClasses}</div>
-                ) : null}
+                <div className="small text-muted mt-1">
+                  Optional. Teacher can be saved even without linking any class.
+                </div>
               </Col>
 
               <Col md={12}>
