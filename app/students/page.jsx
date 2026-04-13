@@ -184,29 +184,29 @@ export default function StudentsPage() {
     setClasses(Array.isArray(data) ? data : []);
   }
 
-  async function loadStudents() {
-    const params = new URLSearchParams();
-    if (query.trim()) params.set('search', query.trim());
-    if (classFilter) params.set('class_id', classFilter);
-    if (sectionFilter) params.set('section', sectionFilter);
+ async function loadStudents() {
+  const params = new URLSearchParams();
+  if (query.trim()) params.set('search', query.trim());
+  if (classFilter) params.set('class_id', classFilter);
+  if (sectionFilter) params.set('section', sectionFilter);
 
-    const qs = params.toString();
-    const url = `${API_BASE}/admin/students${qs ? `?${qs}` : ''}`;
+  const qs = params.toString();
+  const url = `${API_BASE}/admin/students${qs ? `?${qs}` : ''}`;
 
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: authHeaders(),
-      cache: 'no-store',
-    });
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: authHeaders(),
+    cache: 'no-store',
+  });
 
-    const data = await readJsonSafe(res);
+  const data = await readJsonSafe(res);
 
-    if (!res.ok) {
-      throw new Error(data?.detail || 'Failed to load students');
-    }
-
-    setStudents(Array.isArray(data?.items) ? data.items : []);
+  if (!res.ok) {
+    throw new Error(data?.detail || 'Failed to load students');
   }
+
+  setStudents(Array.isArray(data) ? data : []);
+}
 
   async function refreshAll() {
     if (!API_BASE) {
